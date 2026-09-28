@@ -27,7 +27,7 @@ function BoxModel({ node, breakpoint, onChange }) {
   </div></div>;
 }
 
-function ContentTab({ node, location, siblingCount, onChange, onReorder }) {
+function ContentTab({ node, location, siblingCount, onChange, onReorder, onRemove }) {
   const props = node.props;
   const textLabel = node.type === 'Button' ? 'Button label' : node.type === 'Link' ? 'Link label' : node.type === 'Heading' ? 'Heading text' : 'Text';
   return <div className="property-body">
@@ -36,7 +36,7 @@ function ContentTab({ node, location, siblingCount, onChange, onReorder }) {
     {node.type === 'Heading' && <label className="field"><span>Heading level</span><select value={props.level} onChange={event => onChange(node.id, { props: { level: Number(event.target.value) } })}>{[1, 2, 3, 4, 5, 6].map(level => <option key={level} value={level}>H{level}</option>)}</select></label>}
     {node.type === 'Image' && <><label className="field"><span>Image source</span><input value={props.src} placeholder="/assets/photo.jpg or https://…" onChange={event => onChange(node.id, { props: { src: event.target.value } })} /></label><label className="field"><span>Alternative text</span><input value={props.alt} onChange={event => onChange(node.id, { props: { alt: event.target.value } })} /></label></>}
     {(node.type === 'Button' || node.type === 'Link') && <label className="field"><span>Link destination</span><input value={props.href} placeholder="#section or https://…" onChange={event => onChange(node.id, { props: { href: event.target.value } })} /></label>}
-    <div className="property-divider" /><h3>Order in parent</h3><div className="order-actions"><button disabled={location.index === 0} onClick={() => onReorder(node.id, location.index - 1)}>↑ Move up</button><button disabled={location.index >= siblingCount - 1} onClick={() => onReorder(node.id, location.index + 1)}>↓ Move down</button></div>
+    <div className="property-divider" /><h3>Order in parent</h3><div className="order-actions"><button disabled={location.index === 0} onClick={() => onReorder(node.id, location.index - 1)}>↑ Move up</button><button disabled={location.index >= siblingCount - 1} onClick={() => onReorder(node.id, location.index + 1)}>↓ Move down</button></div><button className="remove-node" onClick={() => onRemove(node.id)}>Remove selected node</button>
   </div>;
 }
 
@@ -69,7 +69,7 @@ function StyleTab({ node, breakpoint, onChange }) {
   </div>;
 }
 
-export function PropertiesPanel({ document, selectedId, selectedRegion, breakpoint, onSelect, onSelectRegion, onChange, onReorder }) {
+export function PropertiesPanel({ document, selectedId, selectedRegion, breakpoint, onSelect, onSelectRegion, onChange, onReorder, onRemove }) {
   const [tab, setTab] = useState('content');
   const location = selectedId ? findNode(document, selectedId) : null;
   const selected = location?.node;
@@ -80,7 +80,7 @@ export function PropertiesPanel({ document, selectedId, selectedRegion, breakpoi
   return <div className="panel-scroll"><div className="panel-heading"><span className="panel-kicker">INSPECTOR</span><h2>Properties</h2><p>Content, layout, and style for one node.</p></div>
     {region && <nav className="breadcrumbs" aria-label="Selection breadcrumbs"><button onClick={() => onSelectRegion(region)}>{region}</button>{[...ancestors, ...(selected ? [selectedId] : [])].map(id => <React.Fragment key={id}><span>›</span><button onClick={() => onSelect(id)}>{labelFor(findNode(document, id).node)}</button></React.Fragment>)}</nav>}
     {selected ? <><div className="selection-label"><span>{selected.type}</span><code>{selected.id}</code></div><div className="property-tabs" role="tablist" aria-label="Properties tabs">{['content', 'layout', 'style'].map(name => <button key={name} role="tab" aria-selected={tab === name} className={tab === name ? 'active' : ''} onClick={() => setTab(name)}>{name}</button>)}</div>
-      {tab === 'content' && <ContentTab node={selected} location={location} siblingCount={siblingCount} onChange={onChange} onReorder={onReorder} />}
+      {tab === 'content' && <ContentTab node={selected} location={location} siblingCount={siblingCount} onChange={onChange} onReorder={onReorder} onRemove={onRemove} />}
       {tab === 'layout' && <LayoutTab node={selected} breakpoint={breakpoint} onChange={onChange} />}
       {tab === 'style' && <StyleTab node={selected} breakpoint={breakpoint} onChange={onChange} />}
     </> : <div className="empty-selection"><div>◇</div><strong>{selectedRegion ? `${selectedRegion[0].toUpperCase()}${selectedRegion.slice(1)} selected` : 'Nothing selected'}</strong><p>{selectedRegion ? 'Choose an element to add directly to this region.' : 'Select a node from Layers or the canvas to edit its content, layout, and style.'}</p></div>}

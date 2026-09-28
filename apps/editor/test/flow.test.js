@@ -16,7 +16,7 @@ async function pageJson(page) {
 
 async function selectRegion(page, region) {
   await page.getByRole('button', { name: 'Layers', exact: true }).click();
-  await page.locator(`[data-layer-region="${region}"] button`).click();
+  await page.locator(`[data-layer-region="${region}"] > button:first-child`).click();
   await page.getByRole('button', { name: 'Elements', exact: true }).click();
 }
 

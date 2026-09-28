@@ -2,11 +2,12 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { DragDropProvider, useDraggable, useDroppable } from '@dnd-kit/react';
 import { pointerIntersection } from '@dnd-kit/collision';
-import { addNode, findNode, getAncestors, regions, registry, reorderNode, updateNode, validateDocument } from '@builder/document';
+import { addNode, findNode, getAncestors, regions, registry, removeNode, reorderNode, updateNode, validateDocument } from '@builder/document';
 import { applyDrop, placementFromPointer } from './drop.js';
 import { createPaletteNode, paletteItems } from './palette.js';
 import { PageView } from './render.jsx';
 import { PropertiesPanel } from './properties.jsx';
+import { insertSuggestion, layoutSuggestions } from './suggestions.js';
 import './style.css';
 
 const labelFor = node => node.props.label || node.props.text || node.type;
@@ -18,9 +19,12 @@ function PaletteButton({ item, onAdd }) {
   </button>;
 }
 
-function ElementsPanel({ onAdd }) {
+function ElementsPanel({ onAdd, suggestionRegion, onSuggest, onInsertSuggestion }) {
   return <div className="panel-scroll"><div className="panel-heading"><span className="panel-kicker">BUILD</span><h2>Elements</h2><p>Drag onto the canvas or select a target and click to add.</p></div>
     {['Elements', 'Structure', 'Presets'].map(group => <section className="palette-group" key={group}><h3>{group}</h3>{paletteItems.filter(item => item.group === group).map(item => <PaletteButton key={item.key} item={item} onAdd={onAdd} />)}</section>)}
+    <section className="suggestion-panel" aria-label="Layout suggestions"><h3>Layout suggestions</h3><p>Optional starting points. Every inserted node stays editable.</p><div className="suggestion-regions">{regions.map(region => <button key={region} className={suggestionRegion === region ? 'active' : ''} onClick={() => onSuggest(region)}>{region}</button>)}</div>
+      {layoutSuggestions.filter(item => item.region === suggestionRegion).map(item => <button className="suggestion-item" key={item.key} onClick={() => onInsertSuggestion(item.key, suggestionRegion)}><strong>{item.label}</strong><span>{item.description}</span></button>)}
+    </section>
   </div>;
 }
 
@@ -41,18 +45,22 @@ function LayerRow({ node, depth, selectedId, expanded, onToggle, onSelect, dropT
   </React.Fragment>;
 }
 
-function RegionLayer({ region, nodes, selectedRegion, selectedId, expanded, onToggle, onSelect, onSelectRegion, dropTarget }) {
+function RegionLayer({ region, nodes, selectedRegion, selectedId, expanded, onToggle, onSelect, onSelectRegion, onSuggest, dropTarget }) {
   const { ref } = useDroppable({ id: `layer-region:${region}`, accept: ['palette', 'tree-node'], collisionDetector: pointerIntersection, collisionPriority: 1 });
   const active = dropTarget?.targetId === `layer-region:${region}`;
   return <section className="region-group"><div ref={ref} className={`region-row ${selectedRegion === region ? 'active' : ''}`} data-layer-region={region} data-drop={active && dropTarget.valid ? 'inside' : undefined} data-drop-invalid={active && !dropTarget.valid ? 'true' : undefined}>
-    <button onClick={() => onSelectRegion(region)}><span>⌑</span>{region}<small>{nodes.length}</small></button>
+    <button onClick={() => onSelectRegion(region)}><span>⌑</span>{region}<small>{nodes.length}</small></button><button className="region-suggest" aria-label={`Suggest layout for ${region}`} title={`Layout suggestions for ${region}`} onClick={() => onSuggest(region)}>＋ Layout</button>
   </div>{nodes.map(node => <LayerRow key={node.id} node={node} depth={0} selectedId={selectedId} expanded={expanded} onToggle={onToggle} onSelect={onSelect} dropTarget={dropTarget} />)}</section>;
 }
 
-function LayersPanel({ document, selectedId, selectedRegion, expanded, onToggle, onSelect, onSelectRegion, dropTarget }) {
+function LayersPanel({ document, selectedId, selectedRegion, expanded, onToggle, onSelect, onSelectRegion, onSuggest, dropTarget }) {
   return <div className="panel-scroll"><div className="panel-heading"><span className="panel-kicker">STRUCTURE</span><h2>Layers</h2><p>Select, expand, or drag a row to move it.</p></div>
-    {regions.map(region => <RegionLayer key={region} region={region} nodes={document.regions[region]} selectedId={selectedId} selectedRegion={selectedRegion} expanded={expanded} onToggle={onToggle} onSelect={onSelect} onSelectRegion={onSelectRegion} dropTarget={dropTarget} />)}
+    {regions.map(region => <RegionLayer key={region} region={region} nodes={document.regions[region]} selectedId={selectedId} selectedRegion={selectedRegion} expanded={expanded} onToggle={onToggle} onSelect={onSelect} onSelectRegion={onSelectRegion} onSuggest={onSuggest} dropTarget={dropTarget} />)}
   </div>;
+}
+
+function ViewportSwitch({ breakpoint, onChange }) {
+  return <div className="breakpoint-switch" role="group" aria-label="Page viewport">{['desktop', 'tablet', 'mobile'].map(mode => <button key={mode} className={breakpoint === mode ? 'active' : ''} aria-pressed={breakpoint === mode} onClick={() => onChange(mode)}>{mode}</button>)}</div>;
 }
 
 function sourceFromDrag(source, paletteNode) {
@@ -80,6 +88,7 @@ function hitTarget(pointer, sourceId) {
 
 function Editor({ document, setDocument, selectedId, setSelectedId, selectedRegion, setSelectedRegion, breakpoint, setBreakpoint, onStatus }) {
   const [leftTab, setLeftTab] = useState('elements');
+  const [suggestionRegion, setSuggestionRegion] = useState('main');
   const [expanded, setExpanded] = useState(() => new Set());
   const [dropTarget, setDropTarget] = useState(null);
   const pointer = useRef({ x: null, y: null });
@@ -100,6 +109,18 @@ function Editor({ document, setDocument, selectedId, setSelectedId, selectedRegi
   const reorder = (id, index) => {
     try { setDocument(reorderNode(document, id, index)); onStatus('Node reordered', 'success'); }
     catch (error) { onStatus(error.message, 'error'); }
+  };
+  const remove = id => {
+    try { setDocument(removeNode(document, id)); setSelectedId(null); onStatus('Node removed from Page JSON', 'success'); }
+    catch (error) { onStatus(error.message, 'error'); }
+  };
+  const suggest = region => { setSuggestionRegion(region); setLeftTab('elements'); };
+  const addSuggestion = (key, region) => {
+    try {
+      const result = insertSuggestion(document, key, region, selectedId);
+      setDocument(result.document); select(result.insertedIds[0]); expandAncestors(result.document, result.insertedIds[0]);
+      onStatus(`${layoutSuggestions.find(item => item.key === key).label} added to ${result.parent}`, 'success');
+    } catch (error) { onStatus(error.message, 'error'); }
   };
   const add = key => {
     try {
@@ -145,10 +166,10 @@ function Editor({ document, setDocument, selectedId, setSelectedId, selectedRegi
   return <DragDropProvider onDragStart={event => { const id = String(event.operation.source?.id || ''); paletteNode.current = id.startsWith('palette:') ? createPaletteNode(id.slice(8)) : null; onStatus('Drag over a region or node', 'info'); }} onDragMove={inspectDrop} onDragOver={inspectDrop} onDragEnd={finishDrop}>
     <div className="workspace">
       <aside className="sidebar left-sidebar"><div className="left-tabs"><button className={leftTab === 'elements' ? 'active' : ''} onClick={() => setLeftTab('elements')}>Elements</button><button className={leftTab === 'layers' ? 'active' : ''} onClick={() => setLeftTab('layers')}>Layers</button></div>
-        {leftTab === 'elements' ? <ElementsPanel onAdd={add} /> : <LayersPanel document={document} selectedId={selectedId} selectedRegion={selectedRegion} expanded={expanded} onToggle={toggle} onSelect={select} onSelectRegion={selectRegion} dropTarget={dropTarget} />}
+        {leftTab === 'elements' ? <ElementsPanel onAdd={add} suggestionRegion={suggestionRegion} onSuggest={suggest} onInsertSuggestion={addSuggestion} /> : <LayersPanel document={document} selectedId={selectedId} selectedRegion={selectedRegion} expanded={expanded} onToggle={toggle} onSelect={select} onSelectRegion={selectRegion} onSuggest={suggest} dropTarget={dropTarget} />}
       </aside>
-      <main className="canvas-area"><div className="canvas-toolbar"><div><span className="canvas-dot" /> Canvas <span className="canvas-size">{breakpoint === 'desktop' ? 'Fluid desktop' : breakpoint === 'tablet' ? '768px tablet' : '390px mobile'}</span></div><div className="breakpoint-switch" role="group" aria-label="Canvas breakpoint">{['desktop', 'tablet', 'mobile'].map(mode => <button key={mode} className={breakpoint === mode ? 'active' : ''} aria-pressed={breakpoint === mode} onClick={() => setBreakpoint(mode)}>{mode}</button>)}</div></div><div className="canvas-scroll"><PageView document={document} selectedId={selectedId} onSelect={select} dropTarget={dropTarget} breakpoint={breakpoint} /></div></main>
-      <aside className="sidebar properties"><PropertiesPanel document={document} selectedId={selectedId} selectedRegion={selectedRegion} breakpoint={breakpoint} onSelect={select} onSelectRegion={selectRegion} onChange={change} onReorder={reorder} /></aside>
+      <main className="canvas-area"><div className="canvas-toolbar"><div><span className="canvas-dot" /> Canvas <span className="canvas-size">{breakpoint === 'desktop' ? 'Fluid desktop' : breakpoint === 'tablet' ? '768px tablet' : '390px mobile'}</span></div><ViewportSwitch breakpoint={breakpoint} onChange={setBreakpoint} /></div><div className="canvas-scroll"><PageView document={document} selectedId={selectedId} onSelect={select} dropTarget={dropTarget} breakpoint={breakpoint} /></div></main>
+      <aside className="sidebar properties"><PropertiesPanel document={document} selectedId={selectedId} selectedRegion={selectedRegion} breakpoint={breakpoint} onSelect={select} onSelectRegion={selectRegion} onChange={change} onReorder={reorder} onRemove={remove} /></aside>
     </div>
   </DragDropProvider>;
 }
@@ -161,6 +182,7 @@ function App() {
   const [status, setStatus] = useState({ message: 'Select a region or drag an element to begin', tone: 'info' });
   const [preview, setPreview] = useState(false);
   const [breakpoint, setBreakpoint] = useState('desktop');
+  const [previewDesktopWidth, setPreviewDesktopWidth] = useState(960);
   useEffect(() => {
     fetch('/api/sample-page').then(response => { if (!response.ok) throw new Error(`API returned ${response.status}`); return response.json(); })
       .then(page => setDocument(validateDocument(page)))
@@ -171,11 +193,15 @@ function App() {
     const url = URL.createObjectURL(blob);
     const link = window.document.createElement('a'); link.href = url; link.download = 'page.json'; link.click(); URL.revokeObjectURL(url);
   };
+  const togglePreview = () => {
+    if (!preview) setPreviewDesktopWidth(window.document.querySelector('.canvas-area .page')?.getBoundingClientRect().width || 960);
+    setPreview(value => !value);
+  };
   return <div className="app-shell">
     <header className="app-header"><div className="app-brand"><span className="brand-mark">✦</span><strong>Northstar Builder</strong><span className="divider" /><span className="project-name">Sample page</span></div>
-      <div className="header-actions"><span className="status-dot" /><span className="status-text">Local document</span><button className="toolbar-button" disabled={!document} onClick={download}>Download JSON</button><button className="view-button" disabled={!document} onClick={() => setPreview(value => !value)}>{preview ? 'Back to editor' : 'Preview page'}</button></div></header>
+      <div className="header-actions"><span className="status-dot" /><span className="status-text">Local document</span><button className="toolbar-button" disabled={!document} onClick={download}>Download JSON</button><button className="view-button" disabled={!document} onClick={togglePreview}>{preview ? 'Back to editor' : 'Preview page'}</button></div></header>
     <div className={`status-bar ${status.tone}`} role="status">{status.message}</div>
-    {error ? <div className="error">Could not load the sample page: {error}. Start the API with <code>npm run dev</code>.</div> : !document ? <div className="loading">Loading sample page…</div> : preview ? <div className="preview-wrap"><PageView document={document} interactive={false} breakpoint={breakpoint} /></div> : <Editor document={document} setDocument={setDocument} selectedId={selectedId} setSelectedId={setSelectedId} selectedRegion={selectedRegion} setSelectedRegion={setSelectedRegion} breakpoint={breakpoint} setBreakpoint={setBreakpoint} onStatus={(message, tone) => setStatus({ message, tone })} />}
+    {error ? <div className="error">Could not load the sample page: {error}. Start the API with <code>npm run dev</code>.</div> : !document ? <div className="loading">Loading sample page…</div> : preview ? <div className="preview-wrap"><div className="preview-toolbar"><strong>Preview</strong><ViewportSwitch breakpoint={breakpoint} onChange={setBreakpoint} /></div><div className="preview-stage" style={{ '--preview-desktop-width': `${previewDesktopWidth}px` }}><PageView document={document} interactive={false} breakpoint={breakpoint} /></div></div> : <Editor document={document} setDocument={setDocument} selectedId={selectedId} setSelectedId={setSelectedId} selectedRegion={selectedRegion} setSelectedRegion={setSelectedRegion} breakpoint={breakpoint} setBreakpoint={setBreakpoint} onStatus={(message, tone) => setStatus({ message, tone })} />}
   </div>;
 }
 
