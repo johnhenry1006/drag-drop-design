@@ -9,12 +9,17 @@ CREATE TABLE IF NOT EXISTS pages (
   id uuid PRIMARY KEY,
   project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   name text NOT NULL CHECK (length(trim(name)) > 0),
+  path text NOT NULL,
   document jsonb NOT NULL,
   revision integer NOT NULL DEFAULT 1 CHECK (revision >= 1),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS pages_project_id_idx ON pages(project_id);
+ALTER TABLE pages ADD COLUMN IF NOT EXISTS path text;
+UPDATE pages SET path = CASE WHEN id = '00000000-0000-4000-8000-000000000002'::uuid THEN '/' ELSE '/page-' || replace(id::text, '-', '') END WHERE path IS NULL;
+ALTER TABLE pages ALTER COLUMN path SET NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS pages_project_path_idx ON pages(project_id, path);
 
 CREATE TABLE IF NOT EXISTS page_revisions (
   page_id uuid NOT NULL REFERENCES pages(id) ON DELETE CASCADE,

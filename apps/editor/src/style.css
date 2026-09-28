@@ -4,9 +4,10 @@ button, input, select { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .42; }
 .app-shell { min-height: 100vh; background: #f1f3f8; color: #17233d; }
-.app-header { height: 64px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 0 22px; background: #fff; border-bottom: 1px solid #e2e7f0; }
+.app-header { height: 64px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 0 22px; background: #fff; border-bottom: 1px solid #e2e7f0; overflow-x: auto; }
 .app-brand, .header-actions { display: flex; align-items: center; gap: 12px; }
 .header-actions { min-width: 0; gap: 7px; }
+.header-actions button, .header-actions select { flex: none; }
 .header-actions select { max-width: 150px; min-width: 85px; padding: 8px 6px; border: 1px solid #d9dfeb; border-radius: 7px; background: white; color: #25395e; font-size: 11px; }
 .header-actions .toolbar-button, .header-actions .view-button { padding: 8px 9px; font-size: 11px; }
 .save-indicator { min-width: 76px; color: #187856; font-size: 11px; white-space: nowrap; }
@@ -16,6 +17,20 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .revision-popover label, .revision-popover select, .revision-popover button { display: block; width: 100%; margin-top: 10px; }
 .revision-popover select, .revision-popover button { padding: 9px; border: 1px solid #dce3ee; border-radius: 7px; background: white; }
 .revision-popover button { background: #4f6fdd; border-color: #4f6fdd; color: white; font-weight: 800; }
+.export-backdrop { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: #14234b66; }
+.export-dialog { width: min(570px, calc(100vw - 32px)); max-height: min(80vh, 760px); overflow: auto; padding: 24px; border-radius: 14px; background: white; box-shadow: 0 20px 60px #10244855; font-size: 12px; }
+.export-heading { display: flex; align-items: center; justify-content: space-between; }
+.export-heading h2 { margin: 0; font-size: 20px; }
+.export-heading button { border: 0; background: transparent; font-size: 25px; color: #64738f; }
+.export-dialog p { line-height: 1.5; color: #65748e; }
+.export-dialog label { display: block; margin: 18px 0; font-weight: 800; }
+.export-dialog select { display: block; width: 100%; margin-top: 8px; padding: 10px; border: 1px solid #dce3ee; border-radius: 7px; }
+.export-dialog h3 { margin: 20px 0 8px; font-size: 12px; }
+.export-dialog ul { margin: 0; padding-left: 19px; line-height: 1.7; }
+.export-dialog .export-warning { padding: 10px; border-radius: 7px; background: #fff5e5; color: #92591d; }
+.export-dialog .export-ready { color: #187856; }
+.export-issues { color: #a33842; overflow-wrap: anywhere; }
+.export-dialog > .view-button { margin-top: 18px; }
 .app-brand strong { font-size: 14px; white-space: nowrap; }
 .brand-mark { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 10px; background: #4f6fdd; color: white; font-size: 20px; }
 .divider { width: 1px; height: 20px; margin: 0 6px; background: #d9dfeb; }

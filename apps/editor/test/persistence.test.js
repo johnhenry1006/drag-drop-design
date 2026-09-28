@@ -21,7 +21,7 @@ test('editor saves nested responsive Page JSON, reopens it, restores a revision,
     const page = await context.newPage();
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
-    page.on('dialog', dialog => dialog.accept(dialog.message().includes('Project') ? projectName : dialog.message().includes('copy') ? 'Conflict copy' : 'Nested saved page'));
+    page.on('dialog', dialog => dialog.accept(dialog.message().includes('Project') ? projectName : dialog.message() === 'Page path' ? '/' : dialog.message().includes('Path for the copy') ? dialog.defaultValue() : dialog.message().includes('copy') ? 'Conflict copy' : 'Nested saved page'));
     await page.goto(editorUrl);
     await page.getByRole('heading', { name: 'Make room for remarkable.' }).waitFor();
     await page.getByRole('button', { name: 'New project' }).click();

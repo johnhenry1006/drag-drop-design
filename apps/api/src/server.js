@@ -1,7 +1,9 @@
 import Fastify from 'fastify';
+import { zipSync, strToU8 } from 'fflate';
 import { samplePage } from '@builder/document';
+import { analyzeProjectExport, buildProjectFiles } from '@builder/exporters/project';
 import { checkDatabase, pool } from './db.js';
-import { createAsset, createPage, createProject, getAsset, getPage, getProject, getRevision, listAssets, listPages, listProjects, listRevisions, migrate, restorePage, savePage, updateProject, validDocument } from './store.js';
+import { createAsset, createPage, createProject, getAsset, getPage, getProject, getRevision, listAssets, listPages, listProjects, listRevisions, migrate, projectExportData, restorePage, savePage, updateProject, validDocument } from './store.js';
 
 export const app = Fastify({ logger: process.env.NODE_ENV !== 'test' });
 const missing = (reply, kind) => reply.code(404).send({ error: `${kind} not found` });
@@ -22,9 +24,9 @@ const imageTypes = {
 };
 
 app.setErrorHandler((error, request, reply) => {
-  const status = error.statusCode || (error.code === '23503' ? 404 : 500);
+  const status = error.statusCode || (error.code === '23503' ? 404 : error.code === '23505' ? 409 : 500);
   if (status >= 500) request.log.error(error);
-  reply.code(status).send({ error: status >= 500 ? 'Internal server error' : error.message });
+  reply.code(status).send({ error: status >= 500 ? 'Internal server error' : error.code === '23505' ? 'Page path already exists in this project' : error.message });
 });
 app.addContentTypeParser(/^image\/(png|jpeg|gif|webp)$/, { parseAs: 'buffer', bodyLimit: 10 * 1024 * 1024 }, (request, body, done) => done(null, body));
 
@@ -50,14 +52,14 @@ app.get('/api/projects/:projectId/pages', async (request, reply) => {
 app.post('/api/projects/:projectId/pages', async (request, reply) => {
   const id = uuid(request.params.projectId);
   if (!await getProject(id)) return missing(reply, 'Project');
-  return reply.code(201).send({ page: await createPage(id, request.body?.name, request.body?.document) });
+  return reply.code(201).send({ page: await createPage(id, request.body?.name, request.body?.document, request.body?.path) });
 });
 app.get('/api/pages/:pageId', async (request, reply) => {
   const page = await getPage(uuid(request.params.pageId));
   return page ? { page } : missing(reply, 'Page');
 });
 app.put('/api/pages/:pageId', async (request, reply) => {
-  const result = await savePage(uuid(request.params.pageId), request.body?.expectedRevision, request.body?.document, request.body?.name);
+  const result = await savePage(uuid(request.params.pageId), request.body?.expectedRevision, request.body?.document, request.body?.name, request.body?.path);
   if (result.page) return { page: result.page };
   if (!result.current) return missing(reply, 'Page');
   return reply.code(409).send({ error: 'Page revision conflict', currentRevision: result.current.revision });
@@ -108,6 +110,25 @@ app.get('/api/assets/:assetId/content', async (request, reply) => {
   const asset = await getAsset(uuid(request.params.assetId));
   if (!asset) return missing(reply, 'Asset');
   return reply.header('Cache-Control', 'public, max-age=31536000, immutable').type(asset.mediaType).send(asset.contents);
+});
+
+app.get('/api/projects/:projectId/exports/:target/check', async (request, reply) => {
+  const id = uuid(request.params.projectId);
+  if (!await getProject(id)) return missing(reply, 'Project');
+  const { pages, assets } = await projectExportData(id);
+  return { target: request.params.target, pages: pages.map(page => ({ id: page.id, name: page.name, path: page.path })), issues: analyzeProjectExport(request.params.target, pages, assets) };
+});
+app.get('/api/projects/:projectId/exports/:target.zip', async (request, reply) => {
+  const id = uuid(request.params.projectId);
+  const project = await getProject(id);
+  if (!project) return missing(reply, 'Project');
+  const { pages, assets } = await projectExportData(id);
+  const issues = analyzeProjectExport(request.params.target, pages, assets);
+  if (issues.length) return reply.code(422).send({ error: 'Export has unsupported content', issues });
+  const files = buildProjectFiles(request.params.target, pages, assets);
+  const archive = zipSync(Object.fromEntries(Object.entries(files).map(([name, value]) => [name, typeof value === 'string' ? strToU8(value) : new Uint8Array(value)])), { level: 6 });
+  const filename = `${project.name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '') || 'website'}-${request.params.target}.zip`;
+  return reply.type('application/zip').header('Content-Disposition', `attachment; filename="${filename}"`).send(Buffer.from(archive));
 });
 
 if (process.env.NODE_ENV !== 'test') {

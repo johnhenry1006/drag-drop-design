@@ -12,6 +12,7 @@
     "test:api": "npm run test -w @builder/api",
     "test:editor": "node --test apps/editor/test/*.test.js",
     "build": "npm run build -w @builder/editor",
+    "verify:exports": "node scripts/verify-exports.js",
     "export:sample": "node packages/exporters/src/export-sample.js"
   },
   "devDependencies": {

@@ -54,3 +54,11 @@ test('Advanced CSS accepts safe declarations and rejects selectors, resources, a
   page.regions.main[0].advancedCss = { mobile: 'color: nope' };
   assert.throws(() => validateDocument(page), /advancedCss.mobile/);
 });
+
+test('shorthand CSS precedes side overrides regardless of JSON object key order', () => {
+  let page = structuredClone(samplePage);
+  page = updateNode(page, 'hero', { styles: { desktop: { paddingTop: '18px', padding: '40px' }, mobile: { gap: '12px', rowGap: '4px' } } });
+  const css = documentCss(JSON.parse(JSON.stringify(page)));
+  assert.match(css, /padding:40px;[^}]*padding-top:18px/);
+  assert.match(css, /gap:12px;row-gap:4px/);
+});

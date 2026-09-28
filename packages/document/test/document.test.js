@@ -33,7 +33,7 @@ test('desktop, tablet, and mobile node CSS stays scoped', () => {
   heading.styles.mobile.fontSize = '24px';
   validateDocument(page);
   const css = documentCss(page);
-  assert.match(css, /\[data-node-id="work_heading"\]\{text-align:center/);
+  assert.match(css, /\[data-node-id="work_heading"\]\{[^}]*text-align:center/);
   assert.match(css, /@media \(max-width: 900px\)\{\[data-node-id="work_heading"\]\{font-size:32px\}/);
   assert.match(css, /@media \(max-width: 600px\)\{\[data-node-id="work_heading"\]\{font-size:24px\}/);
   heading.styles.mobile.color = 'red};body{display:none';

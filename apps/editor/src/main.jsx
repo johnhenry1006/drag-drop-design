@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { DragDropProvider, useDraggable, useDroppable } from '@dnd-kit/react';
 import { pointerIntersection } from '@dnd-kit/collision';
-import { addNode, findNode, getAncestors, regions, registry, removeNode, reorderNode, samplePage, updateNode, validateDocument } from '@builder/document';
+import { addNode, findNode, getAncestors, normalizePagePath, regions, registry, removeNode, reorderNode, samplePage, updateNode, validateDocument } from '@builder/document';
 import { applyDrop, placementFromPointer } from './drop.js';
 import { createPaletteNode, paletteItems } from './palette.js';
 import { PageView } from './render.jsx';
@@ -195,6 +195,11 @@ function App() {
   const [showRevisions, setShowRevisions] = useState(false);
   const [revisions, setRevisions] = useState([]);
   const [chosenRevision, setChosenRevision] = useState('');
+  const [showExport, setShowExport] = useState(false);
+  const [exportTarget, setExportTarget] = useState('html');
+  const [exportReport, setExportReport] = useState(null);
+  const [exportError, setExportError] = useState('');
+  const [exportBusy, setExportBusy] = useState(false);
   const dirty = Boolean(document && savedDocument && JSON.stringify(document) !== JSON.stringify(savedDocument));
 
   const activatePage = page => {
@@ -204,6 +209,7 @@ function App() {
     window.localStorage.setItem('builder:lastProjectId', page.projectId);
     window.localStorage.setItem('builder:lastPageId', page.id);
     setSelectedId(null); setSelectedRegion(null); setShowRevisions(false);
+    setShowExport(false);
     setStatus({ message: `${page.name} opened at revision ${page.revision}`, tone: 'success' });
   };
   const openProject = async project => {
@@ -274,10 +280,26 @@ function App() {
     if (!skipDirtyCheck && dirty && !window.confirm('Discard unsaved changes and create a blank page?')) return;
     const name = window.prompt('Page name', 'New page');
     if (name === null) return;
+    const suggestedPath = !skipDirtyCheck && pages.length ? `/${name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'page'}` : '/';
+    const requestedPath = window.prompt('Page path', suggestedPath);
+    if (requestedPath === null) return;
     try {
-      const page = (await api(`/projects/${project.id}/pages`, jsonOptions('POST', { name, document: blankPage(name) }))).page;
+      const path = normalizePagePath(requestedPath);
+      const page = (await api(`/projects/${project.id}/pages`, jsonOptions('POST', { name, path, document: blankPage(name) }))).page;
       setPages(previous => [...previous, page]); activatePage(page);
     } catch (cause) { setStatus({ message: `Create page failed: ${cause.message}`, tone: 'error' }); }
+  };
+  const changePagePath = async () => {
+    const requested = window.prompt('Page path', currentPage.path);
+    if (requested === null) return;
+    try {
+      const path = normalizePagePath(requested);
+      const snapshot = document;
+      const page = (await api(`/pages/${currentPage.id}`, jsonOptions('PUT', { expectedRevision: currentPage.revision, document: snapshot, path }))).page;
+      setCurrentPage(page); setSavedDocument(snapshot);
+      setPages(previous => previous.map(item => item.id === page.id ? { ...item, path, revision: page.revision } : item));
+      setStatus({ message: `Page path saved as ${path}`, tone: 'success' });
+    } catch (cause) { setStatus({ message: `Path update failed: ${cause.message}`, tone: 'error' }); }
   };
   const createNewProject = async () => {
     if (dirty && !window.confirm('Discard unsaved changes and create another project?')) return;
@@ -292,8 +314,11 @@ function App() {
   const saveAsCopy = async () => {
     const name = window.prompt('Name for a copy of this page', `${currentPage.name} copy`);
     if (name === null) return;
+    const requestedPath = window.prompt('Path for the copy', `/copy-${Date.now().toString(36)}`);
+    if (requestedPath === null) return;
     try {
-      const page = (await api(`/projects/${currentProject.id}/pages`, jsonOptions('POST', { name, document }))).page;
+      const path = normalizePagePath(requestedPath);
+      const page = (await api(`/projects/${currentProject.id}/pages`, jsonOptions('POST', { name, path, document }))).page;
       setPages(previous => [...previous, page]); activatePage(page);
       setStatus({ message: `Saved a copy as ${name}`, tone: 'success' });
     } catch (cause) { setStatus({ message: `Save as copy failed: ${cause.message}`, tone: 'error' }); }
@@ -322,6 +347,35 @@ function App() {
       setStatus({ message: `${asset.filename} uploaded; save the page to keep its reference`, tone: 'success' });
     } catch (cause) { setStatus({ message: `Image upload failed: ${cause.message}`, tone: 'error' }); }
   };
+  useEffect(() => {
+    if (!showExport || !currentProject || dirty) { setExportReport(null); return undefined; }
+    let canceled = false;
+    setExportReport(null); setExportError('');
+    api(`/projects/${currentProject.id}/exports/${exportTarget}/check`)
+      .then(report => { if (!canceled) setExportReport(report); })
+      .catch(cause => { if (!canceled) setExportError(cause.message); });
+    return () => { canceled = true; };
+  }, [showExport, currentProject?.id, exportTarget, dirty, currentPage?.revision]);
+  const downloadExport = async () => {
+    if (!exportReport || exportReport.issues.length || dirty || exportBusy) return;
+    setExportBusy(true); setExportError('');
+    try {
+      const response = await fetch(`/api/projects/${currentProject.id}/exports/${exportTarget}.zip`);
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        if (payload.issues) setExportReport(previous => ({ ...previous, issues: payload.issues }));
+        throw new Error(payload.error || `Export failed with HTTP ${response.status}`);
+      }
+      const blob = await response.blob();
+      const disposition = response.headers.get('content-disposition') || '';
+      const filename = disposition.match(/filename="([^"]+)"/)?.[1] || `website-${exportTarget}.zip`;
+      const url = URL.createObjectURL(blob);
+      const link = window.document.createElement('a'); link.href = url; link.download = filename; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setStatus({ message: `${exportTarget.toUpperCase()} ZIP downloaded`, tone: 'success' });
+    } catch (cause) { setExportError(cause.message); }
+    finally { setExportBusy(false); }
+  };
   const download = () => {
     const blob = new Blob([JSON.stringify(document, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -330,12 +384,14 @@ function App() {
   const togglePreview = () => {
     if (!preview) setPreviewDesktopWidth(window.document.querySelector('.canvas-area .page')?.getBoundingClientRect().width || 960);
     setShowRevisions(false);
+    setShowExport(false);
     setPreview(value => !value);
   };
   return <div className="app-shell">
     <header className="app-header"><div className="app-brand"><span className="brand-mark">✦</span><strong>Northstar Builder</strong></div>
-      <div className="header-actions"><select aria-label="Project" value={currentProject?.id || ''} onChange={event => chooseProject(event.target.value)} disabled={!projects.length}>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select><button className="toolbar-button" onClick={createNewProject}>New project</button><select aria-label="Page" value={currentPage?.id || ''} onChange={event => choosePage(event.target.value)} disabled={!pages.length}>{pages.map(page => <option key={page.id} value={page.id}>{page.name}</option>)}</select><button className="toolbar-button" disabled={!currentProject} onClick={() => createNewPage(currentProject)}>New page</button><span className={`save-indicator ${dirty ? 'dirty' : ''}`} data-save-state={dirty ? 'unsaved' : 'saved'}>{dirty ? 'Unsaved changes' : currentPage ? `Saved · v${currentPage.revision}` : 'No page'}</span><button className="toolbar-button" disabled={!dirty || saving || !currentPage} onClick={save}>{saving ? 'Saving…' : 'Save'}</button>{conflict && <button className="toolbar-button" onClick={saveAsCopy}>Save as copy</button>}<button className="toolbar-button" disabled={!currentPage} onClick={reloadPage}>Reload</button><button className="toolbar-button" disabled={!currentPage || preview} onClick={showHistory}>Revisions</button><button className="toolbar-button" disabled={!document} onClick={download}>Download JSON</button><button className="view-button" disabled={!document} onClick={togglePreview}>{preview ? 'Back to editor' : 'Preview page'}</button></div></header>
+      <div className="header-actions"><select aria-label="Project" value={currentProject?.id || ''} onChange={event => chooseProject(event.target.value)} disabled={!projects.length}>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select><button className="toolbar-button" onClick={createNewProject}>New project</button><select aria-label="Page" value={currentPage?.id || ''} onChange={event => choosePage(event.target.value)} disabled={!pages.length}>{pages.map(page => <option key={page.id} value={page.id}>{page.name} · {page.path}</option>)}</select><button className="toolbar-button" disabled={!currentProject} onClick={() => createNewPage(currentProject)}>New page</button><button className="toolbar-button" disabled={!currentPage} onClick={changePagePath}>Path</button><span className={`save-indicator ${dirty ? 'dirty' : ''}`} data-save-state={dirty ? 'unsaved' : 'saved'}>{dirty ? 'Unsaved changes' : currentPage ? `Saved · v${currentPage.revision}` : 'No page'}</span><button className="toolbar-button" disabled={!dirty || saving || !currentPage} onClick={save}>{saving ? 'Saving…' : 'Save'}</button>{conflict && <button className="toolbar-button" onClick={saveAsCopy}>Save as copy</button>}<button className="toolbar-button" disabled={!currentPage} onClick={reloadPage}>Reload</button><button className="toolbar-button" disabled={!currentPage || preview} onClick={showHistory}>Revisions</button><button className="toolbar-button" disabled={!currentProject || preview} onClick={() => setShowExport(true)}>Export</button><button className="toolbar-button" disabled={!document} onClick={download}>Download JSON</button><button className="view-button" disabled={!document} onClick={togglePreview}>{preview ? 'Back to editor' : 'Preview page'}</button></div></header>
     {showRevisions && !preview && <div className="revision-popover"><strong>Page revisions</strong><p>Restoring creates a new revision.</p><label>Restore from<select aria-label="Revision to restore" value={chosenRevision} onChange={event => setChosenRevision(event.target.value)}>{revisions.map(item => <option key={item.revision} value={item.revision}>Revision {item.revision}</option>)}</select></label><button onClick={restore} disabled={!chosenRevision}>Restore revision</button></div>}
+    {showExport && !preview && <div className="export-backdrop" role="presentation"><section className="export-dialog" role="dialog" aria-label="Export project"><div className="export-heading"><h2>Export project</h2><button aria-label="Close export" onClick={() => setShowExport(false)}>×</button></div><p>Download all saved pages and referenced assets as a source project.</p><label>Target<select aria-label="Export target" value={exportTarget} onChange={event => setExportTarget(event.target.value)}><option value="html">HTML5</option><option value="react">React JavaScript/JSX</option><option value="vue">Vue JavaScript</option></select></label>{dirty ? <p className="export-warning">Save the current page before exporting. Unsaved edits are not included.</p> : !exportReport && !exportError ? <p>Checking saved pages…</p> : exportReport && <><h3>Pages</h3><ul>{exportReport.pages.map(page => <li key={page.id}>{page.path} — {page.name}</li>)}</ul>{exportReport.issues.length ? <><h3>Resolve before download</h3><ul className="export-issues">{exportReport.issues.map((item, index) => <li key={index}>{item.pagePath || 'Project'}{item.nodeId ? ` · ${item.nodeId}` : ''} · {item.property}: {item.message}</li>)}</ul></> : <p className="export-ready">Ready to export {exportReport.pages.length} page(s).</p>}</>}{exportError && <p className="field-error" role="alert">{exportError}</p>}<button className="view-button" disabled={dirty || !exportReport || exportReport.issues.length > 0 || exportBusy} onClick={downloadExport}>{exportBusy ? 'Generating…' : 'Download ZIP'}</button></section></div>}
     <div className={`status-bar ${status.tone}`} role="status">{status.message}</div>
     {error ? <div className="error">Could not load the project: {error}. Start the API and PostgreSQL with <code>npm run dev</code>. <button className="toolbar-button" onClick={() => window.location.reload()}>Retry connection</button></div> : !document ? <div className="loading">{currentProject ? 'No page open. Use New page to start editing.' : 'Loading page…'}</div> : preview ? <div className="preview-wrap"><div className="preview-toolbar"><strong>Preview</strong><ViewportSwitch breakpoint={breakpoint} onChange={setBreakpoint} /></div><div className="preview-stage" style={{ '--preview-desktop-width': `${previewDesktopWidth}px` }}><PageView document={document} interactive={false} breakpoint={breakpoint} /></div></div> : <Editor document={document} setDocument={setDocument} selectedId={selectedId} setSelectedId={setSelectedId} selectedRegion={selectedRegion} setSelectedRegion={setSelectedRegion} breakpoint={breakpoint} setBreakpoint={setBreakpoint} onStatus={(message, tone) => setStatus({ message, tone })} onUploadAsset={uploadAsset} assets={assets} />}
   </div>;

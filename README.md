@@ -20,15 +20,20 @@ npm test
 npm run test:api
 npm run test:editor
 npm run build
+npm run verify:exports
 ```
 
 `npm run test:api` uses the local PostgreSQL database and removes the test projects it creates. `npm run test:editor` uses the installed Google Chrome, the same database, and the editor and API from `npm run dev` at ports 5173 and 3001. Set `CHROME_PATH` or `EDITOR_URL` to override the browser defaults. The API also runs the idempotent schema migration at startup.
+
+`npm run verify:exports` requires the running editor and API. It creates a temporary two-page project, downloads and unzips HTML5, React JSX, and Vue ZIPs into ignored `generated/verification/`, builds and serves all three, compares content and computed spacing with Preview at desktop and mobile viewports, checks bundled image rendering and `/about` navigation, then removes its temporary database project.
 
 PostgreSQL stores projects, pages, immutable page revisions, and image bytes. Page documents are versioned JSONB and are validated with `@builder/document` before create, update, or restore. The API seeds a sample project and page once. Page saves use an expected revision and return HTTP 409 when another save has won; restoring an old revision creates a new current revision.
 
 The toolbar creates and opens projects and pages, marks unsaved changes, saves, reloads, and restores revisions. It remembers the last opened page in this browser. A conflicting save keeps local edits and offers **Save as copy**. An Image node's Content tab uploads PNG, JPEG, GIF, or WebP files up to 10 MB, or reuses an asset already in the project. Each upload gets a stable `/api/assets/{id}/content` URL; removing a node never deletes its asset. Asset bytes remain available to Preview after reload and restoration.
 
-API routes include `GET/POST /api/projects`, `GET/PATCH /api/projects/:id`, `GET/POST /api/projects/:id/pages`, `GET/PUT /api/pages/:id`, `GET /api/pages/:id/revisions`, `GET /api/pages/:id/revisions/:revision`, `POST /api/pages/:id/restore`, `GET/POST /api/projects/:id/assets`, `GET /api/assets/:id`, and `GET /api/assets/:id/content`. This local foundation has no authentication or asset deletion endpoint. Exported source projects currently retain API asset URLs, so uploaded images need the API to remain available when those projects run.
+Each page has a stored path such as `/` or `/about`. The New page and Path controls create or change it; paths are unique within a project. **Export** checks every saved page, node, CSS property, link, and asset for the selected target. It shows exact unsupported items before enabling Download ZIP. Save unsaved edits first. ZIPs contain all saved pages, referenced uploaded assets, desktop/tablet/mobile CSS, and a target-specific README. HTML5 uses directory index files and relative links. React and Vue use client-side History API routing; production hosts need a fallback to `index.html` for nested paths. The generated projects include `dev`, `build`, and `preview` package scripts.
+
+API routes include `GET/POST /api/projects`, `GET/PATCH /api/projects/:id`, `GET/POST /api/projects/:id/pages`, `GET/PUT /api/pages/:id`, `GET /api/pages/:id/revisions`, `GET /api/pages/:id/revisions/:revision`, `POST /api/pages/:id/restore`, `GET/POST /api/projects/:id/assets`, `GET /api/assets/:id`, `GET /api/assets/:id/content`, plus `GET /api/projects/:id/exports/:target/check` and `GET /api/projects/:id/exports/:target.zip`. This local foundation has no authentication or asset deletion endpoint. Exported ZIPs bundle referenced uploaded images; external image URLs still depend on their hosts.
 
 ## Editor controls
 

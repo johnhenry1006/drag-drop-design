@@ -1,7 +1,7 @@
 import { documentCss, regions, registry, supportedStyles, validateDocument } from '@builder/document';
 
-const classFor = id => `n-${id}`;
-const escapeHtml = value => String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+export const classFor = id => `n-${id}`;
+export const escapeHtml = value => String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 const tagFor = node => node.type === 'Heading' ? `h${node.props.level || 2}` : registry[node.type].tag;
 
 function eachNode(document, callback) {
@@ -22,55 +22,55 @@ function checkSupport(document, target) {
   });
 }
 
-function stylesheet(document) {
-  return `*{box-sizing:border-box}html,body,#app{margin:0;min-height:100%}a{text-decoration:none}.region-footer{background:#172b58}\n${documentCss(document, id => `.${classFor(id)}`)}\n`;
+export function stylesheet(document, selectorFor = id => `.${classFor(id)}`) {
+  return `*{box-sizing:border-box}html,body,#app{margin:0;min-height:100%}a{text-decoration:none}.region-footer{background:#172b58}\n${documentCss(document, selectorFor)}\n`;
 }
 
-function attributes(node, syntax) {
+function attributes(node, syntax, transformUrl = value => value) {
   const attrs = { class: classFor(node.id) };
-  if (node.type === 'Image') { attrs.src = node.props.src; attrs.alt = node.props.alt; }
-  if (node.type === 'Button' || node.type === 'Link') attrs.href = node.props.href;
+  if (node.type === 'Image') { attrs.src = transformUrl(node.props.src, node, 'src'); attrs.alt = node.props.alt; }
+  if (node.type === 'Button' || node.type === 'Link') attrs.href = transformUrl(node.props.href, node, 'href');
   if (syntax === 'html') return Object.entries(attrs).map(([key, value]) => ` ${key}="${escapeHtml(value)}"`).join('');
   return Object.entries(attrs).map(([key, value]) => ` ${key === 'class' ? 'className' : key}={${JSON.stringify(value)}}`).join('');
 }
 
-function htmlNode(node) {
+function htmlNode(node, transformUrl) {
   const tag = tagFor(node);
-  const attrs = attributes(node, 'html');
+  const attrs = attributes(node, 'html', transformUrl);
   if (node.type === 'Image') return `<img${attrs}>`;
-  const content = node.children ? node.children.map(htmlNode).join('') : escapeHtml(node.props.text || '');
+  const content = node.children ? node.children.map(child => htmlNode(child, transformUrl)).join('') : escapeHtml(node.props.text || '');
   return `<${tag}${attrs}>${content}</${tag}>`;
 }
 
-function jsxNode(node) {
+function jsxNode(node, transformUrl) {
   const tag = tagFor(node);
-  const attrs = attributes(node, 'jsx');
+  const attrs = attributes(node, 'jsx', transformUrl);
   if (node.type === 'Image') return `<img${attrs} />`;
-  const content = node.children ? node.children.map(jsxNode).join('') : `{${JSON.stringify(node.props.text || '')}}`;
+  const content = node.children ? node.children.map(child => jsxNode(child, transformUrl)).join('') : `{${JSON.stringify(node.props.text || '')}}`;
   return `<${tag}${attrs}>${content}</${tag}>`;
 }
 
-function vueNode(node) {
+function vueNode(node, transformUrl = value => value) {
   const props = { class: classFor(node.id) };
-  if (node.type === 'Image') { props.src = node.props.src; props.alt = node.props.alt; }
-  if (node.type === 'Button' || node.type === 'Link') props.href = node.props.href;
-  const children = node.children ? `[${node.children.map(vueNode).join(',')}]` : node.type === 'Image' ? 'undefined' : JSON.stringify(node.props.text || '');
+  if (node.type === 'Image') { props.src = transformUrl(node.props.src, node, 'src'); props.alt = node.props.alt; }
+  if (node.type === 'Button' || node.type === 'Link') props.href = transformUrl(node.props.href, node, 'href');
+  const children = node.children ? `[${node.children.map(child => vueNode(child, transformUrl)).join(',')}]` : node.type === 'Image' ? 'undefined' : JSON.stringify(node.props.text || '');
   return `h(${JSON.stringify(tagFor(node))},${JSON.stringify(props)},${children})`;
 }
 
-function htmlRegions(document) {
-  return regions.map(region => `<${region} class="region-${region}">${document.regions[region].map(htmlNode).join('')}</${region}>`).join('\n');
+export function htmlRegions(document, transformUrl) {
+  return regions.map(region => `<${region} class="region-${region}">${document.regions[region].map(node => htmlNode(node, transformUrl)).join('')}</${region}>`).join('\n');
 }
 
-function jsxRegions(document) {
-  return regions.map(region => `<${region} className="region-${region}">${document.regions[region].map(jsxNode).join('')}</${region}>`).join('\n');
+export function jsxRegions(document, transformUrl) {
+  return regions.map(region => `<${region} className="region-${region}">${document.regions[region].map(node => jsxNode(node, transformUrl)).join('')}</${region}>`).join('\n');
 }
 
-function vueRegions(document) {
-  return regions.map(region => `h('${region}',{class:'region-${region}'},[${document.regions[region].map(vueNode).join(',')}])`).join(',');
+export function vueRegions(document, transformUrl) {
+  return regions.map(region => `h('${region}',{class:'region-${region}'},[${document.regions[region].map(node => vueNode(node, transformUrl)).join(',')}])`).join(',');
 }
 
-function packageFile(name, dependencies) {
+export function packageFile(name, dependencies) {
   return JSON.stringify({ name, private: true, version: '1.0.0', type: 'module', scripts: { dev: 'vite', build: 'vite build', preview: 'vite preview' }, dependencies }, null, 2) + '\n';
 }
 
