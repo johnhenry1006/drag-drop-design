@@ -1,13 +1,4 @@
-import { documentCss, regions, registry, validateDocument } from '@builder/document';
-
-const supportedStyles = new Set([
-  'alignItems', 'backgroundColor', 'border', 'borderColor', 'borderRadius', 'borderWidth', 'boxShadow',
-  'color', 'display', 'flex', 'flexDirection', 'fontFamily', 'fontSize', 'fontWeight', 'gap',
-  'gridTemplateColumns', 'height', 'justifyContent', 'letterSpacing', 'lineHeight', 'margin',
-  'marginBottom', 'marginLeft', 'marginRight', 'marginTop', 'maxWidth', 'minHeight', 'minWidth',
-  'objectFit', 'opacity', 'padding', 'paddingBottom', 'paddingLeft', 'paddingRight', 'paddingTop',
-  'textAlign', 'textDecoration', 'width'
-]);
+import { documentCss, regions, registry, supportedStyles, validateDocument } from '@builder/document';
 
 const classFor = id => `n-${id}`;
 const escapeHtml = value => String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');

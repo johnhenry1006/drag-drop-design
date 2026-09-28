@@ -38,9 +38,9 @@ function RegionView({ region, nodes, selectedId, onSelect, dropTarget }) {
   }, nodes.map(node => <NodeView key={node.id} node={node} selectedId={selectedId} onSelect={onSelect} dropTarget={dropTarget} depth={0} />));
 }
 
-export function PageView({ document, selectedId, onSelect, dropTarget, interactive = true }) {
-  return <div className="page" data-node-id={document.id}>
-    <style>{documentCss(document)}</style>
+export function PageView({ document, selectedId, onSelect, dropTarget, breakpoint = 'desktop', interactive = true }) {
+  return <div className="page" data-node-id={document.id} data-breakpoint={breakpoint}>
+    <style>{documentCss(document, undefined, breakpoint)}</style>
     {interactive ? regions.map(region => <RegionView key={region} region={region} nodes={document.regions[region]} selectedId={selectedId} onSelect={onSelect} dropTarget={dropTarget} />) : regions.map(region => React.createElement(region, { key: region, className: `page-region region-${region}` }, document.regions[region].map(node => <StaticNodeView key={node.id} node={node} />)))}
   </div>;
 }

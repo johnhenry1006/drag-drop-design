@@ -6,6 +6,7 @@ import { addNode, findNode, getAncestors, regions, registry, reorderNode, update
 import { applyDrop, placementFromPointer } from './drop.js';
 import { createPaletteNode, paletteItems } from './palette.js';
 import { PageView } from './render.jsx';
+import { PropertiesPanel } from './properties.jsx';
 import './style.css';
 
 const labelFor = node => node.props.label || node.props.text || node.type;
@@ -54,24 +55,6 @@ function LayersPanel({ document, selectedId, selectedRegion, expanded, onToggle,
   </div>;
 }
 
-function PropertiesPanel({ document, selectedId, selectedRegion, onSelect, onSelectRegion, onChange, onReorder }) {
-  const location = selectedId ? findNode(document, selectedId) : null;
-  const selected = location?.node;
-  const ancestors = selected ? getAncestors(document, selectedId) : [];
-  const region = selected ? location.region : selectedRegion;
-  const crumbs = selected ? [...ancestors, selectedId] : [];
-  const siblingCount = location ? (location.parentId ? findNode(document, location.parentId).node.children.length : document.regions[location.region].length) : 0;
-  return <div className="panel-scroll"><div className="panel-heading"><span className="panel-kicker">INSPECTOR</span><h2>Properties</h2><p>Content and placement for the selected node.</p></div>
-    {region && <nav className="breadcrumbs" aria-label="Selection breadcrumbs"><button onClick={() => onSelectRegion(region)}>{region}</button>{crumbs.map(id => <React.Fragment key={id}><span>›</span><button onClick={() => onSelect(id)}>{labelFor(findNode(document, id).node)}</button></React.Fragment>)}</nav>}
-    {selected ? <div className="property-body"><div className="selection-label"><span>{selected.type}</span><code>{selected.id}</code></div>
-      {registry[selected.type].editable.map(key => <label className="field" key={key}><span>{key}</span>{key === 'level' ? <select value={selected.props.level || 2} onChange={event => onChange(selectedId, { props: { level: Number(event.target.value) } })}>{[1, 2, 3, 4, 5, 6].map(level => <option key={level} value={level}>H{level}</option>)}</select> : <input value={selected.props[key] || ''} onChange={event => onChange(selectedId, { props: { [key]: event.target.value } })} />}</label>)}
-      <div className="property-divider" /><h3>Order in parent</h3><div className="order-actions"><button disabled={location.index === 0} onClick={() => onReorder(selectedId, location.index - 1)}>↑ Move up</button><button disabled={location.index >= siblingCount - 1} onClick={() => onReorder(selectedId, location.index + 1)}>↓ Move down</button></div>
-      <div className="property-divider" /><h3>Desktop style</h3>{['color', 'backgroundColor', 'padding', 'fontSize', 'gridTemplateColumns'].map(key => <label className="field" key={key}><span>{key}</span><input value={selected.styles.desktop[key] || ''} placeholder="Inherit" onChange={event => onChange(selectedId, { styles: { desktop: { [key]: event.target.value || null } } })} /></label>)}
-      <p className="property-note">Styles stay on this node in Page JSON. Clear a field to remove its override.</p>
-    </div> : <div className="empty-selection"><div>◇</div><strong>{selectedRegion ? `${selectedRegion[0].toUpperCase()}${selectedRegion.slice(1)} selected` : 'Nothing selected'}</strong><p>{selectedRegion ? 'Click an element to add it directly to this region.' : 'Choose a region or node from Layers, or click the canvas.'}</p></div>}
-  </div>;
-}
-
 function sourceFromDrag(source, paletteNode) {
   if (!source) return null;
   const id = String(source.id);
@@ -95,7 +78,7 @@ function hitTarget(pointer, sourceId) {
   return null;
 }
 
-function Editor({ document, setDocument, selectedId, setSelectedId, selectedRegion, setSelectedRegion, onStatus }) {
+function Editor({ document, setDocument, selectedId, setSelectedId, selectedRegion, setSelectedRegion, breakpoint, setBreakpoint, onStatus }) {
   const [leftTab, setLeftTab] = useState('elements');
   const [expanded, setExpanded] = useState(() => new Set());
   const [dropTarget, setDropTarget] = useState(null);
@@ -164,8 +147,8 @@ function Editor({ document, setDocument, selectedId, setSelectedId, selectedRegi
       <aside className="sidebar left-sidebar"><div className="left-tabs"><button className={leftTab === 'elements' ? 'active' : ''} onClick={() => setLeftTab('elements')}>Elements</button><button className={leftTab === 'layers' ? 'active' : ''} onClick={() => setLeftTab('layers')}>Layers</button></div>
         {leftTab === 'elements' ? <ElementsPanel onAdd={add} /> : <LayersPanel document={document} selectedId={selectedId} selectedRegion={selectedRegion} expanded={expanded} onToggle={toggle} onSelect={select} onSelectRegion={selectRegion} dropTarget={dropTarget} />}
       </aside>
-      <main className="canvas-area"><div className="canvas-toolbar"><div><span className="canvas-dot" /> Desktop canvas <span className="canvas-size">1440px</span></div><span className="canvas-hint">Drag to insert · select to inspect</span></div><div className="canvas-scroll"><PageView document={document} selectedId={selectedId} onSelect={select} dropTarget={dropTarget} /></div></main>
-      <aside className="sidebar properties"><PropertiesPanel document={document} selectedId={selectedId} selectedRegion={selectedRegion} onSelect={select} onSelectRegion={selectRegion} onChange={change} onReorder={reorder} /></aside>
+      <main className="canvas-area"><div className="canvas-toolbar"><div><span className="canvas-dot" /> Canvas <span className="canvas-size">{breakpoint === 'desktop' ? 'Fluid desktop' : breakpoint === 'tablet' ? '768px tablet' : '390px mobile'}</span></div><div className="breakpoint-switch" role="group" aria-label="Canvas breakpoint">{['desktop', 'tablet', 'mobile'].map(mode => <button key={mode} className={breakpoint === mode ? 'active' : ''} aria-pressed={breakpoint === mode} onClick={() => setBreakpoint(mode)}>{mode}</button>)}</div></div><div className="canvas-scroll"><PageView document={document} selectedId={selectedId} onSelect={select} dropTarget={dropTarget} breakpoint={breakpoint} /></div></main>
+      <aside className="sidebar properties"><PropertiesPanel document={document} selectedId={selectedId} selectedRegion={selectedRegion} breakpoint={breakpoint} onSelect={select} onSelectRegion={selectRegion} onChange={change} onReorder={reorder} /></aside>
     </div>
   </DragDropProvider>;
 }
@@ -177,6 +160,7 @@ function App() {
   const [error, setError] = useState('');
   const [status, setStatus] = useState({ message: 'Select a region or drag an element to begin', tone: 'info' });
   const [preview, setPreview] = useState(false);
+  const [breakpoint, setBreakpoint] = useState('desktop');
   useEffect(() => {
     fetch('/api/sample-page').then(response => { if (!response.ok) throw new Error(`API returned ${response.status}`); return response.json(); })
       .then(page => setDocument(validateDocument(page)))
@@ -191,7 +175,7 @@ function App() {
     <header className="app-header"><div className="app-brand"><span className="brand-mark">✦</span><strong>Northstar Builder</strong><span className="divider" /><span className="project-name">Sample page</span></div>
       <div className="header-actions"><span className="status-dot" /><span className="status-text">Local document</span><button className="toolbar-button" disabled={!document} onClick={download}>Download JSON</button><button className="view-button" disabled={!document} onClick={() => setPreview(value => !value)}>{preview ? 'Back to editor' : 'Preview page'}</button></div></header>
     <div className={`status-bar ${status.tone}`} role="status">{status.message}</div>
-    {error ? <div className="error">Could not load the sample page: {error}. Start the API with <code>npm run dev</code>.</div> : !document ? <div className="loading">Loading sample page…</div> : preview ? <div className="preview-wrap"><PageView document={document} interactive={false} /></div> : <Editor document={document} setDocument={setDocument} selectedId={selectedId} setSelectedId={setSelectedId} selectedRegion={selectedRegion} setSelectedRegion={setSelectedRegion} onStatus={(message, tone) => setStatus({ message, tone })} />}
+    {error ? <div className="error">Could not load the sample page: {error}. Start the API with <code>npm run dev</code>.</div> : !document ? <div className="loading">Loading sample page…</div> : preview ? <div className="preview-wrap"><PageView document={document} interactive={false} breakpoint={breakpoint} /></div> : <Editor document={document} setDocument={setDocument} selectedId={selectedId} setSelectedId={setSelectedId} selectedRegion={selectedRegion} setSelectedRegion={setSelectedRegion} breakpoint={breakpoint} setBreakpoint={setBreakpoint} onStatus={(message, tone) => setStatus({ message, tone })} />}
   </div>;
 }
 

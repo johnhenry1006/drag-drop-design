@@ -67,8 +67,8 @@ export function removeNode(document, id) {
 
 export function updateNode(document, id, patch) {
   validateDocument(document);
-  if (!patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).some(key => !['props', 'styles'].includes(key))) {
-    throw new Error('updateNode accepts only props and styles');
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).some(key => !['props', 'styles', 'advancedCss'].includes(key))) {
+    throw new Error('updateNode accepts only props, styles, and advancedCss');
   }
   const next = structuredClone(document);
   const found = locate(next, id);
@@ -81,6 +81,12 @@ export function updateNode(document, id, patch) {
       for (const [name, value] of Object.entries(values)) if (value === null) delete merged[name];
       found.node.styles[breakpoint] = merged;
     }
+  }
+  if (patch.advancedCss) {
+    const merged = { ...found.node.advancedCss, ...patch.advancedCss };
+    for (const [breakpoint, value] of Object.entries(patch.advancedCss)) if (value === null) delete merged[breakpoint];
+    if (Object.keys(merged).length) found.node.advancedCss = merged;
+    else delete found.node.advancedCss;
   }
   return validateDocument(next);
 }
