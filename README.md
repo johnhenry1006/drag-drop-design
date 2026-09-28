@@ -1,6 +1,6 @@
 # drag-drop-design
 
-A JavaScript/JSX foundation for a visual website builder. The editor loads a validated version 1 JSON sample from a Node.js API. Header, Main, and Footer are editable document regions; the current UI supports selecting nodes and editing their text properties. Drag-and-drop, project CRUD, asset management, and source exporters are future increments.
+A JavaScript/JSX foundation for a visual website builder. The editor loads a validated version 1 JSON sample from a Node.js API. Header, Main, and Footer are flexible document regions. The editor has an Elements palette, Layers tree, desktop canvas, and a docked Properties panel. Drag-and-drop and click-to-add update Page JSON through pure tree operations.
 
 ## Run locally
 
@@ -16,10 +16,17 @@ Open http://127.0.0.1:5173. The API listens at http://127.0.0.1:3001. Check `htt
 
 ```bash
 npm test
+npm run test:editor
 npm run build
 ```
 
+`npm run test:editor` uses the installed Google Chrome and expects the editor and API from `npm run dev` to be running at ports 5173 and 3001. Set `CHROME_PATH` or `EDITOR_URL` to override those defaults.
+
 The sample page is served from memory. PostgreSQL is configured and the connection can be checked, but there are no project tables or save routes yet.
+
+## Editor controls
+
+Select a region in Layers, then click an Elements item to add it directly to Header, Main, or Footer. Select a container or layout to add inside it; select a leaf to add after it. Drag a palette item onto a region or node on the canvas to place it precisely. Drag existing nodes by the handle in Layers. The top and bottom quarters of a node mean **before** and **after**; its center means **inside** if it accepts children. A blue marker shows the planned insertion; a red outline and status message explain invalid drops. Expand container rows in Layers to select nested content. Properties shows selection breadcrumbs and order buttons. Download JSON saves the current in-memory Page document.
 
 ## Document operations and exports
 
@@ -31,4 +38,4 @@ Generate the three projects from the same sample JSON:
 npm run export:sample
 ```
 
-Outputs are in `generated/html`, `generated/react`, and `generated/vue`. Serve `generated/html` with any static server. Run `npm install` and `npm run dev` inside either source project. The generated directories are ignored by Git. Exporters currently support Section, Container, Layout, Heading, Text, Image, Button, and the basic CSS properties listed in `packages/exporters/src/index.js`; an unsupported property fails with its node ID and breakpoint.
+Outputs are in `generated/html`, `generated/react`, and `generated/vue`. Serve `generated/html` with any static server. Run `npm install` and `npm run dev` inside either source project. The generated directories are ignored by Git. Exporters currently support Section, Container, Layout, Navigation, Heading, Text, Image, Button, Link, and the basic CSS properties listed in `packages/exporters/src/index.js`; an unsupported property fails with its node ID and breakpoint.

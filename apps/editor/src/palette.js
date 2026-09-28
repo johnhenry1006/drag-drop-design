@@ -1,0 +1,44 @@
+import { registry } from '@builder/document';
+
+export const paletteItems = [
+  { key: 'Heading', label: 'Heading', group: 'Elements', icon: 'H' },
+  { key: 'Text', label: 'Text', group: 'Elements', icon: '¶' },
+  { key: 'Image', label: 'Image', group: 'Elements', icon: '▧' },
+  { key: 'Button', label: 'Button', group: 'Elements', icon: '▣' },
+  { key: 'Link', label: 'Link', group: 'Elements', icon: '↗' },
+  { key: 'Navigation', label: 'Navigation', group: 'Structure', icon: '☷' },
+  { key: 'Container', label: 'Container', group: 'Structure', icon: '□' },
+  { key: 'Section', label: 'Section', group: 'Structure', icon: '▤' },
+  { key: 'Layout', label: 'Layout', group: 'Structure', icon: '▥' },
+  { key: 'Columns3', label: '3-column layout', group: 'Presets', icon: '▥' }
+];
+
+const styles = desktop => ({ desktop, tablet: {}, mobile: {} });
+const id = () => `node_${crypto.randomUUID().replaceAll('-', '')}`;
+
+function basic(type, props = {}, desktop = {}) {
+  return {
+    id: id(),
+    type,
+    props: { ...registry[type].defaults, ...props },
+    styles: styles(desktop),
+    ...(registry[type].kind === 'container' ? { children: [] } : {})
+  };
+}
+
+export function createPaletteNode(key) {
+  if (key === 'Columns3') {
+    return { ...basic('Layout', { label: 'Three columns' }, { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', padding: '20px' }),
+      children: [1, 2, 3].map(number => basic('Container', { label: `Column ${number}` }, { minHeight: '80px', padding: '16px' })) };
+  }
+  if (!registry[key]) throw new Error(`Unknown palette item ${key}`);
+  if (key === 'Navigation') return basic(key, {}, { display: 'flex', gap: '20px', alignItems: 'center', minHeight: '48px', padding: '8px' });
+  if (key === 'Container') return basic(key, {}, { minHeight: '80px', padding: '16px' });
+  if (key === 'Section') return basic(key, {}, { minHeight: '100px', padding: '24px' });
+  if (key === 'Layout') return basic(key, {}, { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', padding: '16px' });
+  if (key === 'Heading') return basic(key, {}, { fontSize: '32px', margin: '12px 0' });
+  if (key === 'Text') return basic(key, {}, { lineHeight: '1.5' });
+  if (key === 'Link') return basic(key, {}, { color: '#4f6fdd', display: 'inline-block', padding: '6px' });
+  if (key === 'Button') return basic(key, {}, { display: 'inline-block', backgroundColor: '#4f6fdd', color: '#fff', padding: '10px 16px', borderRadius: '8px' });
+  return basic(key);
+}

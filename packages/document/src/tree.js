@@ -77,7 +77,9 @@ export function updateNode(document, id, patch) {
   if (patch.styles) {
     found.node.styles = { ...found.node.styles };
     for (const [breakpoint, values] of Object.entries(patch.styles)) {
-      found.node.styles[breakpoint] = { ...found.node.styles[breakpoint], ...values };
+      const merged = { ...found.node.styles[breakpoint], ...values };
+      for (const [name, value] of Object.entries(values)) if (value === null) delete merged[name];
+      found.node.styles[breakpoint] = merged;
     }
   }
   return validateDocument(next);

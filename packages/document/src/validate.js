@@ -38,7 +38,7 @@ function validateNode(node, path, ids) {
   if (unsupportedProp) throw new Error(`${path}.props has unsupported property ${unsupportedProp}`);
   for (const [key, value] of Object.entries(node.props)) {
     if (key === 'level' ? !Number.isInteger(value) || value < 1 || value > 6 : typeof value !== 'string') throw new Error(`${path}.props.${key} is invalid`);
-    if (key === 'href' && !/^(#|\/|https?:\/\/|mailto:|tel:)/i.test(value)) throw new Error(`${path}.props.href has an unsupported URL`);
+    if (key === 'href' && value && !/^(#|\/|https?:\/\/|mailto:|tel:)/i.test(value)) throw new Error(`${path}.props.href has an unsupported URL`);
     if (key === 'src' && value && !/^(\/|https?:\/\/|data:image\/)/i.test(value)) throw new Error(`${path}.props.src has an unsupported URL`);
   }
   validateStyles(node.styles, path);

@@ -38,7 +38,7 @@ function stylesheet(document) {
 function attributes(node, syntax) {
   const attrs = { class: classFor(node.id) };
   if (node.type === 'Image') { attrs.src = node.props.src; attrs.alt = node.props.alt; }
-  if (node.type === 'Button') attrs.href = node.props.href;
+  if (node.type === 'Button' || node.type === 'Link') attrs.href = node.props.href;
   if (syntax === 'html') return Object.entries(attrs).map(([key, value]) => ` ${key}="${escapeHtml(value)}"`).join('');
   return Object.entries(attrs).map(([key, value]) => ` ${key === 'class' ? 'className' : key}={${JSON.stringify(value)}}`).join('');
 }
@@ -62,7 +62,7 @@ function jsxNode(node) {
 function vueNode(node) {
   const props = { class: classFor(node.id) };
   if (node.type === 'Image') { props.src = node.props.src; props.alt = node.props.alt; }
-  if (node.type === 'Button') props.href = node.props.href;
+  if (node.type === 'Button' || node.type === 'Link') props.href = node.props.href;
   const children = node.children ? `[${node.children.map(vueNode).join(',')}]` : node.type === 'Image' ? 'undefined' : JSON.stringify(node.props.text || '');
   return `h(${JSON.stringify(tagFor(node))},${JSON.stringify(props)},${children})`;
 }
