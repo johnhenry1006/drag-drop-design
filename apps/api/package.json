@@ -1,0 +1,7 @@
+{
+  "name": "@builder/api",
+  "private": true,
+  "type": "module",
+  "scripts": { "dev": "node --watch src/server.js", "start": "node src/server.js" },
+  "dependencies": { "@builder/document": "*", "fastify": "^5.6.0", "pg": "^8.16.0" }
+}

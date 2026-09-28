@@ -1,0 +1,14 @@
+{
+  "name": "drag-drop-design",
+  "private": true,
+  "type": "module",
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev": "concurrently -k -n api,editor \"npm run dev -w @builder/api\" \"npm run dev -w @builder/editor\"",
+    "test": "node --test packages/document/test/*.test.js",
+    "build": "npm run build -w @builder/editor"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
