@@ -2,12 +2,13 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { DragDropProvider, useDraggable, useDroppable } from '@dnd-kit/react';
 import { pointerIntersection } from '@dnd-kit/collision';
-import { addNode, findNode, getAncestors, regions, registry, removeNode, reorderNode, updateNode, validateDocument } from '@builder/document';
+import { addNode, findNode, getAncestors, regions, registry, removeNode, reorderNode, samplePage, updateNode, validateDocument } from '@builder/document';
 import { applyDrop, placementFromPointer } from './drop.js';
 import { createPaletteNode, paletteItems } from './palette.js';
 import { PageView } from './render.jsx';
 import { PropertiesPanel } from './properties.jsx';
 import { insertSuggestion, layoutSuggestions } from './suggestions.js';
+import { api, jsonOptions, uploadImage } from './api.js';
 import './style.css';
 
 const labelFor = node => node.props.label || node.props.text || node.type;
@@ -86,7 +87,7 @@ function hitTarget(pointer, sourceId) {
   return null;
 }
 
-function Editor({ document, setDocument, selectedId, setSelectedId, selectedRegion, setSelectedRegion, breakpoint, setBreakpoint, onStatus }) {
+function Editor({ document, setDocument, selectedId, setSelectedId, selectedRegion, setSelectedRegion, breakpoint, setBreakpoint, onStatus, onUploadAsset, assets }) {
   const [leftTab, setLeftTab] = useState('elements');
   const [suggestionRegion, setSuggestionRegion] = useState('main');
   const [expanded, setExpanded] = useState(() => new Set());
@@ -169,13 +170,19 @@ function Editor({ document, setDocument, selectedId, setSelectedId, selectedRegi
         {leftTab === 'elements' ? <ElementsPanel onAdd={add} suggestionRegion={suggestionRegion} onSuggest={suggest} onInsertSuggestion={addSuggestion} /> : <LayersPanel document={document} selectedId={selectedId} selectedRegion={selectedRegion} expanded={expanded} onToggle={toggle} onSelect={select} onSelectRegion={selectRegion} onSuggest={suggest} dropTarget={dropTarget} />}
       </aside>
       <main className="canvas-area"><div className="canvas-toolbar"><div><span className="canvas-dot" /> Canvas <span className="canvas-size">{breakpoint === 'desktop' ? 'Fluid desktop' : breakpoint === 'tablet' ? '768px tablet' : '390px mobile'}</span></div><ViewportSwitch breakpoint={breakpoint} onChange={setBreakpoint} /></div><div className="canvas-scroll"><PageView document={document} selectedId={selectedId} onSelect={select} dropTarget={dropTarget} breakpoint={breakpoint} /></div></main>
-      <aside className="sidebar properties"><PropertiesPanel document={document} selectedId={selectedId} selectedRegion={selectedRegion} breakpoint={breakpoint} onSelect={select} onSelectRegion={selectRegion} onChange={change} onReorder={reorder} onRemove={remove} /></aside>
+      <aside className="sidebar properties"><PropertiesPanel document={document} selectedId={selectedId} selectedRegion={selectedRegion} breakpoint={breakpoint} onSelect={select} onSelectRegion={selectRegion} onChange={change} onReorder={reorder} onRemove={remove} onUploadAsset={onUploadAsset} assets={assets} /></aside>
     </div>
   </DragDropProvider>;
 }
 
 function App() {
   const [document, setDocument] = useState(null);
+  const [savedDocument, setSavedDocument] = useState(null);
+  const [projects, setProjects] = useState([]);
+  const [pages, setPages] = useState([]);
+  const [assets, setAssets] = useState([]);
+  const [currentProject, setCurrentProject] = useState(null);
+  const [currentPage, setCurrentPage] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
   const [selectedRegion, setSelectedRegion] = useState(null);
   const [error, setError] = useState('');
@@ -183,11 +190,138 @@ function App() {
   const [preview, setPreview] = useState(false);
   const [breakpoint, setBreakpoint] = useState('desktop');
   const [previewDesktopWidth, setPreviewDesktopWidth] = useState(960);
+  const [saving, setSaving] = useState(false);
+  const [conflict, setConflict] = useState(false);
+  const [showRevisions, setShowRevisions] = useState(false);
+  const [revisions, setRevisions] = useState([]);
+  const [chosenRevision, setChosenRevision] = useState('');
+  const dirty = Boolean(document && savedDocument && JSON.stringify(document) !== JSON.stringify(savedDocument));
+
+  const activatePage = page => {
+    const next = validateDocument(page.document);
+    setDocument(next); setSavedDocument(next); setCurrentPage(page);
+    setConflict(false);
+    window.localStorage.setItem('builder:lastProjectId', page.projectId);
+    window.localStorage.setItem('builder:lastPageId', page.id);
+    setSelectedId(null); setSelectedRegion(null); setShowRevisions(false);
+    setStatus({ message: `${page.name} opened at revision ${page.revision}`, tone: 'success' });
+  };
+  const openProject = async project => {
+    const [{ pages: available }, { assets: storedAssets }] = await Promise.all([api(`/projects/${project.id}/pages`), api(`/projects/${project.id}/assets`)]);
+    setCurrentProject(project); setPages(available); setAssets(storedAssets);
+    if (available.length) {
+      const preferred = available.find(page => page.id === window.localStorage.getItem('builder:lastPageId')) || available[0];
+      activatePage((await api(`/pages/${preferred.id}`)).page);
+    }
+    else {
+      setDocument(null); setSavedDocument(null); setCurrentPage(null);
+      setStatus({ message: 'Create a page to start editing', tone: 'info' });
+    }
+  };
   useEffect(() => {
-    fetch('/api/sample-page').then(response => { if (!response.ok) throw new Error(`API returned ${response.status}`); return response.json(); })
-      .then(page => setDocument(validateDocument(page)))
-      .catch(cause => setError(cause.message));
+    (async () => {
+      try {
+        const { projects: available } = await api('/projects');
+        setProjects(available);
+        if (available.length) await openProject(available.find(project => project.id === window.localStorage.getItem('builder:lastProjectId')) || available.find(project => project.id === '00000000-0000-4000-8000-000000000001') || available[0]);
+        else {
+          const project = (await api('/projects', jsonOptions('POST', { name: 'Sample project' }))).project;
+          const page = (await api(`/projects/${project.id}/pages`, jsonOptions('POST', { name: 'Sample page', document: samplePage }))).page;
+          setProjects([project]); setCurrentProject(project); setPages([page]); activatePage(page);
+        }
+      } catch (cause) { setError(cause.message); }
+    })();
   }, []);
+  useEffect(() => {
+    if (!dirty) return undefined;
+    const warn = event => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
+
+  const save = async () => {
+    if (!document || !currentPage || saving) return;
+    const snapshot = document;
+    setSaving(true);
+    try {
+      const page = (await api(`/pages/${currentPage.id}`, jsonOptions('PUT', { expectedRevision: currentPage.revision, document: snapshot }))).page;
+      setCurrentPage(page); setSavedDocument(snapshot);
+      setConflict(false);
+      setPages(previous => previous.map(item => item.id === page.id ? { ...item, revision: page.revision, updatedAt: page.updatedAt } : item));
+      setStatus({ message: `Saved revision ${page.revision}`, tone: 'success' });
+    } catch (cause) {
+      if (cause.status === 409) setConflict(true);
+      setStatus({ message: cause.status === 409 ? `Version conflict: server is at revision ${cause.currentRevision}. Your edits remain local; reload the page or save as copy.` : `Save failed: ${cause.message}`, tone: 'error' });
+    } finally { setSaving(false); }
+  };
+  const reloadPage = async () => {
+    if (!currentPage || (dirty && !window.confirm('Discard unsaved changes and reload this page?'))) return;
+    try { activatePage((await api(`/pages/${currentPage.id}`)).page); }
+    catch (cause) { setStatus({ message: `Reload failed: ${cause.message}`, tone: 'error' }); }
+  };
+  const chooseProject = async id => {
+    if (dirty && !window.confirm('Discard unsaved changes and open another project?')) return;
+    try { await openProject(projects.find(project => project.id === id)); }
+    catch (cause) { setStatus({ message: `Open project failed: ${cause.message}`, tone: 'error' }); }
+  };
+  const choosePage = async id => {
+    if (dirty && !window.confirm('Discard unsaved changes and open another page?')) return;
+    try { activatePage((await api(`/pages/${id}`)).page); }
+    catch (cause) { setStatus({ message: `Open page failed: ${cause.message}`, tone: 'error' }); }
+  };
+  const blankPage = name => ({ schemaVersion: 1, id: `page_${crypto.randomUUID().replaceAll('-', '')}`, type: 'Page', props: { title: name }, styles: { desktop: {}, tablet: {}, mobile: {} }, regions: { header: [], main: [], footer: [] } });
+  const createNewPage = async (project, skipDirtyCheck = false) => {
+    if (!skipDirtyCheck && dirty && !window.confirm('Discard unsaved changes and create a blank page?')) return;
+    const name = window.prompt('Page name', 'New page');
+    if (name === null) return;
+    try {
+      const page = (await api(`/projects/${project.id}/pages`, jsonOptions('POST', { name, document: blankPage(name) }))).page;
+      setPages(previous => [...previous, page]); activatePage(page);
+    } catch (cause) { setStatus({ message: `Create page failed: ${cause.message}`, tone: 'error' }); }
+  };
+  const createNewProject = async () => {
+    if (dirty && !window.confirm('Discard unsaved changes and create another project?')) return;
+    const name = window.prompt('Project name', 'New project');
+    if (name === null) return;
+    try {
+      const project = (await api('/projects', jsonOptions('POST', { name }))).project;
+      setProjects(previous => [...previous, project]); setCurrentProject(project); setPages([]); setAssets([]); setDocument(null); setSavedDocument(null); setCurrentPage(null);
+      await createNewPage(project, true);
+    } catch (cause) { setStatus({ message: `Create project failed: ${cause.message}`, tone: 'error' }); }
+  };
+  const saveAsCopy = async () => {
+    const name = window.prompt('Name for a copy of this page', `${currentPage.name} copy`);
+    if (name === null) return;
+    try {
+      const page = (await api(`/projects/${currentProject.id}/pages`, jsonOptions('POST', { name, document }))).page;
+      setPages(previous => [...previous, page]); activatePage(page);
+      setStatus({ message: `Saved a copy as ${name}`, tone: 'success' });
+    } catch (cause) { setStatus({ message: `Save as copy failed: ${cause.message}`, tone: 'error' }); }
+  };
+  const showHistory = async () => {
+    if (showRevisions) { setShowRevisions(false); return; }
+    try {
+      const { revisions: history } = await api(`/pages/${currentPage.id}/revisions`);
+      setRevisions(history); setChosenRevision(String(history.at(-1)?.revision || '')); setShowRevisions(true);
+    } catch (cause) { setStatus({ message: `Revision history failed: ${cause.message}`, tone: 'error' }); }
+  };
+  const restore = async () => {
+    if (!chosenRevision || (dirty && !window.confirm('Discard unsaved changes and restore this revision?'))) return;
+    try {
+      const page = (await api(`/pages/${currentPage.id}/restore`, jsonOptions('POST', { revision: Number(chosenRevision), expectedRevision: currentPage.revision }))).page;
+      activatePage(page);
+      setPages(previous => previous.map(item => item.id === page.id ? { ...item, revision: page.revision, updatedAt: page.updatedAt } : item));
+      setStatus({ message: `Restored revision ${chosenRevision} as revision ${page.revision}`, tone: 'success' });
+    } catch (cause) { setStatus({ message: cause.status === 409 ? `Restore conflict: server is at revision ${cause.currentRevision}. Reload before restoring.` : `Restore failed: ${cause.message}`, tone: 'error' }); }
+  };
+  const uploadAsset = async (nodeId, file) => {
+    try {
+      const asset = await uploadImage(currentProject.id, file);
+      setAssets(previous => [asset, ...previous]);
+      setDocument(previous => updateNode(previous, nodeId, { props: { src: asset.url } }));
+      setStatus({ message: `${asset.filename} uploaded; save the page to keep its reference`, tone: 'success' });
+    } catch (cause) { setStatus({ message: `Image upload failed: ${cause.message}`, tone: 'error' }); }
+  };
   const download = () => {
     const blob = new Blob([JSON.stringify(document, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -195,13 +329,15 @@ function App() {
   };
   const togglePreview = () => {
     if (!preview) setPreviewDesktopWidth(window.document.querySelector('.canvas-area .page')?.getBoundingClientRect().width || 960);
+    setShowRevisions(false);
     setPreview(value => !value);
   };
   return <div className="app-shell">
-    <header className="app-header"><div className="app-brand"><span className="brand-mark">✦</span><strong>Northstar Builder</strong><span className="divider" /><span className="project-name">Sample page</span></div>
-      <div className="header-actions"><span className="status-dot" /><span className="status-text">Local document</span><button className="toolbar-button" disabled={!document} onClick={download}>Download JSON</button><button className="view-button" disabled={!document} onClick={togglePreview}>{preview ? 'Back to editor' : 'Preview page'}</button></div></header>
+    <header className="app-header"><div className="app-brand"><span className="brand-mark">✦</span><strong>Northstar Builder</strong></div>
+      <div className="header-actions"><select aria-label="Project" value={currentProject?.id || ''} onChange={event => chooseProject(event.target.value)} disabled={!projects.length}>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select><button className="toolbar-button" onClick={createNewProject}>New project</button><select aria-label="Page" value={currentPage?.id || ''} onChange={event => choosePage(event.target.value)} disabled={!pages.length}>{pages.map(page => <option key={page.id} value={page.id}>{page.name}</option>)}</select><button className="toolbar-button" disabled={!currentProject} onClick={() => createNewPage(currentProject)}>New page</button><span className={`save-indicator ${dirty ? 'dirty' : ''}`} data-save-state={dirty ? 'unsaved' : 'saved'}>{dirty ? 'Unsaved changes' : currentPage ? `Saved · v${currentPage.revision}` : 'No page'}</span><button className="toolbar-button" disabled={!dirty || saving || !currentPage} onClick={save}>{saving ? 'Saving…' : 'Save'}</button>{conflict && <button className="toolbar-button" onClick={saveAsCopy}>Save as copy</button>}<button className="toolbar-button" disabled={!currentPage} onClick={reloadPage}>Reload</button><button className="toolbar-button" disabled={!currentPage || preview} onClick={showHistory}>Revisions</button><button className="toolbar-button" disabled={!document} onClick={download}>Download JSON</button><button className="view-button" disabled={!document} onClick={togglePreview}>{preview ? 'Back to editor' : 'Preview page'}</button></div></header>
+    {showRevisions && !preview && <div className="revision-popover"><strong>Page revisions</strong><p>Restoring creates a new revision.</p><label>Restore from<select aria-label="Revision to restore" value={chosenRevision} onChange={event => setChosenRevision(event.target.value)}>{revisions.map(item => <option key={item.revision} value={item.revision}>Revision {item.revision}</option>)}</select></label><button onClick={restore} disabled={!chosenRevision}>Restore revision</button></div>}
     <div className={`status-bar ${status.tone}`} role="status">{status.message}</div>
-    {error ? <div className="error">Could not load the sample page: {error}. Start the API with <code>npm run dev</code>.</div> : !document ? <div className="loading">Loading sample page…</div> : preview ? <div className="preview-wrap"><div className="preview-toolbar"><strong>Preview</strong><ViewportSwitch breakpoint={breakpoint} onChange={setBreakpoint} /></div><div className="preview-stage" style={{ '--preview-desktop-width': `${previewDesktopWidth}px` }}><PageView document={document} interactive={false} breakpoint={breakpoint} /></div></div> : <Editor document={document} setDocument={setDocument} selectedId={selectedId} setSelectedId={setSelectedId} selectedRegion={selectedRegion} setSelectedRegion={setSelectedRegion} breakpoint={breakpoint} setBreakpoint={setBreakpoint} onStatus={(message, tone) => setStatus({ message, tone })} />}
+    {error ? <div className="error">Could not load the project: {error}. Start the API and PostgreSQL with <code>npm run dev</code>. <button className="toolbar-button" onClick={() => window.location.reload()}>Retry connection</button></div> : !document ? <div className="loading">{currentProject ? 'No page open. Use New page to start editing.' : 'Loading page…'}</div> : preview ? <div className="preview-wrap"><div className="preview-toolbar"><strong>Preview</strong><ViewportSwitch breakpoint={breakpoint} onChange={setBreakpoint} /></div><div className="preview-stage" style={{ '--preview-desktop-width': `${previewDesktopWidth}px` }}><PageView document={document} interactive={false} breakpoint={breakpoint} /></div></div> : <Editor document={document} setDocument={setDocument} selectedId={selectedId} setSelectedId={setSelectedId} selectedRegion={selectedRegion} setSelectedRegion={setSelectedRegion} breakpoint={breakpoint} setBreakpoint={setBreakpoint} onStatus={(message, tone) => setStatus({ message, tone })} onUploadAsset={uploadAsset} assets={assets} />}
   </div>;
 }
 

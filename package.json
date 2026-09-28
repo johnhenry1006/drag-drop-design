@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "concurrently -k -n api,editor \"npm run dev -w @builder/api\" \"npm run dev -w @builder/editor\"",
     "test": "node --test packages/document/test/*.test.js",
+    "test:api": "npm run test -w @builder/api",
     "test:editor": "node --test apps/editor/test/*.test.js",
     "build": "npm run build -w @builder/editor",
     "export:sample": "node packages/exporters/src/export-sample.js"

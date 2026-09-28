@@ -1,6 +1,6 @@
 # drag-drop-design
 
-A JavaScript/JSX foundation for a visual website builder. The editor loads a validated version 1 JSON sample from a Node.js API. Header, Main, and Footer are flexible document regions. The editor has an Elements palette, Layers tree, desktop canvas, and a docked Properties panel. Drag-and-drop and click-to-add update Page JSON through pure tree operations.
+A JavaScript/JSX foundation for a visual website builder. The editor opens version 1 Page JSON from a Node.js API backed by PostgreSQL. Header, Main, and Footer are flexible document regions. The editor has an Elements palette, Layers tree, desktop canvas, and a docked Properties panel. Drag-and-drop and click-to-add update Page JSON through pure tree operations.
 
 ## Run locally
 
@@ -9,6 +9,7 @@ Use Node.js 22.12+ and Docker with Compose. From the repository root:
 ```bash
 npm install
 docker compose up -d db
+npm run db:migrate -w @builder/api
 npm run dev
 ```
 
@@ -16,21 +17,26 @@ Open http://127.0.0.1:5173. The API listens at http://127.0.0.1:3001. Check `htt
 
 ```bash
 npm test
+npm run test:api
 npm run test:editor
 npm run build
 ```
 
-`npm run test:editor` uses the installed Google Chrome and expects the editor and API from `npm run dev` to be running at ports 5173 and 3001. Set `CHROME_PATH` or `EDITOR_URL` to override those defaults.
+`npm run test:api` uses the local PostgreSQL database and removes the test projects it creates. `npm run test:editor` uses the installed Google Chrome, the same database, and the editor and API from `npm run dev` at ports 5173 and 3001. Set `CHROME_PATH` or `EDITOR_URL` to override the browser defaults. The API also runs the idempotent schema migration at startup.
 
-The sample page is served from memory. PostgreSQL is configured and the connection can be checked, but there are no project tables or save routes yet.
+PostgreSQL stores projects, pages, immutable page revisions, and image bytes. Page documents are versioned JSONB and are validated with `@builder/document` before create, update, or restore. The API seeds a sample project and page once. Page saves use an expected revision and return HTTP 409 when another save has won; restoring an old revision creates a new current revision.
+
+The toolbar creates and opens projects and pages, marks unsaved changes, saves, reloads, and restores revisions. It remembers the last opened page in this browser. A conflicting save keeps local edits and offers **Save as copy**. An Image node's Content tab uploads PNG, JPEG, GIF, or WebP files up to 10 MB, or reuses an asset already in the project. Each upload gets a stable `/api/assets/{id}/content` URL; removing a node never deletes its asset. Asset bytes remain available to Preview after reload and restoration.
+
+API routes include `GET/POST /api/projects`, `GET/PATCH /api/projects/:id`, `GET/POST /api/projects/:id/pages`, `GET/PUT /api/pages/:id`, `GET /api/pages/:id/revisions`, `GET /api/pages/:id/revisions/:revision`, `POST /api/pages/:id/restore`, `GET/POST /api/projects/:id/assets`, `GET /api/assets/:id`, and `GET /api/assets/:id/content`. This local foundation has no authentication or asset deletion endpoint. Exported source projects currently retain API asset URLs, so uploaded images need the API to remain available when those projects run.
 
 ## Editor controls
 
-Select a region in Layers, then click an Elements item to add it directly to Header, Main, or Footer. Select a container or layout to add inside it; select a leaf to add after it. Drag a palette item onto a region or node on the canvas to place it precisely. Drag existing nodes by the handle in Layers. The top and bottom quarters of a node mean **before** and **after**; its center means **inside** if it accepts children. A blue marker shows the planned insertion; a red outline and status message explain invalid drops. Expand container rows in Layers to select nested content. Properties shows selection breadcrumbs and order buttons. Download JSON saves the current in-memory Page document.
+Select a region in Layers, then click an Elements item to add it directly to Header, Main, or Footer. Select a container or layout to add inside it; select a leaf to add after it. Drag a palette item onto a region or node on the canvas to place it precisely. Drag existing nodes by the handle in Layers. The top and bottom quarters of a node mean **before** and **after**; its center means **inside** if it accepts children. A blue marker shows the planned insertion; a red outline and status message explain invalid drops. Expand container rows in Layers to select nested content. Properties shows selection breadcrumbs and order buttons. **Save** writes Page JSON to PostgreSQL; **Download JSON** makes a local copy.
 
 The Elements panel has optional Layout suggestions for each region. The `＋ Layout` action beside a region in Layers opens its suggestions. Header offers navigation and banner, Main offers Hero, two columns, and Gallery, and Footer offers links and contact. A suggestion inserts ordinary nodes at the selection in that region (inside a selected container, after a selected element, or at the end of the region). You can move, edit, restyle, or remove those nodes with the same controls as any other content. Gallery images use embedded SVG image URLs in Page JSON.
 
-Preview page opens a clean page view without Elements, Layers, Properties, selection outlines, or drop targets. Its desktop, tablet, and mobile controls use the same Page JSON and CSS cascade as the canvas. The desktop preview retains the current canvas page width for a direct spacing comparison. Back to editor preserves the document and active viewport.
+Preview page opens a clean page view without Elements, Layers, Properties, selection outlines, or drop targets. Its desktop, tablet, and mobile controls use the same Page JSON, asset URLs, and CSS cascade as the canvas. The desktop preview retains the current canvas page width for a direct spacing comparison. Back to editor preserves the document and active viewport.
 
 ## Document operations and exports
 
