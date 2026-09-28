@@ -28,7 +28,7 @@ export const samplePage = validateDocument({
             node('eyebrow', 'Text', { text: 'INDEPENDENT DESIGN STUDIO' }, { color: '#5975b1', fontSize: '12px', letterSpacing: '0.18em', fontWeight: '800' }),
             node('hero_title', 'Heading', { text: 'Make room for remarkable.', level: 1 }, { fontSize: 'clamp(48px, 5.4vw, 82px)', lineHeight: '1.04', letterSpacing: '-0.06em', margin: '20px 0' }),
             node('hero_description', 'Text', { text: 'We create thoughtful digital experiences for ambitious people and the ideas they believe in.' }, { fontSize: '20px', lineHeight: '1.6', color: '#63718b', maxWidth: '560px' }),
-            node('hero_action', 'Button', { text: 'Explore our work →', href: '#work' }, { display: 'inlineBlock', backgroundColor: '#4f6fdd', color: '#ffffff', borderRadius: '999px', padding: '16px 25px', marginTop: '18px', fontWeight: '700' })
+            node('hero_action', 'Button', { text: 'Explore our work →', href: '#work' }, { display: 'inline-block', backgroundColor: '#4f6fdd', color: '#ffffff', borderRadius: '999px', padding: '16px 25px', marginTop: '18px', fontWeight: '700' })
           ]),
           node('hero_art', 'Container', { label: 'Visual panel' }, { minHeight: '390px', borderRadius: '32px', backgroundColor: '#dfe7ff', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 24px 65px rgba(36,65,124,.12)' }, [
             node('hero_symbol', 'Heading', { text: '✦', level: 2 }, { fontSize: '180px', lineHeight: '1', color: '#6986e9', margin: '0' })

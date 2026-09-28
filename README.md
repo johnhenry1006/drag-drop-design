@@ -20,3 +20,15 @@ npm run build
 ```
 
 The sample page is served from memory. PostgreSQL is configured and the connection can be checked, but there are no project tables or save routes yet.
+
+## Document operations and exports
+
+`@builder/document` exposes immutable `addNode(page, parent, index, node)`, `removeNode(page, id)`, `updateNode(page, id, { props, styles })`, `moveNode(page, id, parent, index)`, and `reorderNode(page, id, index)`. A parent is a region name (`header`, `main`, `footer`) or a container node ID. Indices refer to the final child list and are zero based. `findNode(page, id)` returns `{ node, parentId, region, index }` or `null`; `getAncestors(page, id)` returns ancestor node IDs from outermost to immediate parent. Operations validate the resulting document and leave the input unchanged.
+
+Generate the three projects from the same sample JSON:
+
+```bash
+npm run export:sample
+```
+
+Outputs are in `generated/html`, `generated/react`, and `generated/vue`. Serve `generated/html` with any static server. Run `npm install` and `npm run dev` inside either source project. The generated directories are ignored by Git. Exporters currently support Section, Container, Layout, Heading, Text, Image, Button, and the basic CSS properties listed in `packages/exporters/src/index.js`; an unsupported property fails with its node ID and breakpoint.

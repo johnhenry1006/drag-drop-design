@@ -30,12 +30,16 @@ function validateStyles(styles, path) {
 
 function validateNode(node, path, ids) {
   if (!plain(node) || !registry[node.type]) throw new Error(`${path} has an unknown node type`);
-  if (!identifier(node.id) || ids.has(node.id)) throw new Error(`${path} has an invalid or duplicate ID`);
+  if (!identifier(node.id) || regions.includes(node.id) || ids.has(node.id)) throw new Error(`${path} has an invalid or duplicate ID`);
   ids.add(node.id);
   if (Object.keys(node).some(key => !['id', 'type', 'props', 'styles', 'children'].includes(key))) throw new Error(`${path} has unsupported data`);
-  if (!plain(node.props) || Object.keys(node.props).some(key => !registry[node.type].editable.includes(key))) throw new Error(`${path}.props has unsupported properties`);
+  if (!plain(node.props)) throw new Error(`${path}.props must be an object`);
+  const unsupportedProp = Object.keys(node.props).find(key => !registry[node.type].editable.includes(key));
+  if (unsupportedProp) throw new Error(`${path}.props has unsupported property ${unsupportedProp}`);
   for (const [key, value] of Object.entries(node.props)) {
     if (key === 'level' ? !Number.isInteger(value) || value < 1 || value > 6 : typeof value !== 'string') throw new Error(`${path}.props.${key} is invalid`);
+    if (key === 'href' && !/^(#|\/|https?:\/\/|mailto:|tel:)/i.test(value)) throw new Error(`${path}.props.href has an unsupported URL`);
+    if (key === 'src' && value && !/^(\/|https?:\/\/|data:image\/)/i.test(value)) throw new Error(`${path}.props.src has an unsupported URL`);
   }
   validateStyles(node.styles, path);
   if (registry[node.type].kind === 'container') {
