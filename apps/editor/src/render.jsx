@@ -20,8 +20,25 @@ const renderers = {
   checkbox: (node, content, common) => <ControlNode node={node} common={common} />,
   radio: (node, content, common) => <ControlNode node={node} common={common} />,
   switch: (node, content, common) => <ControlNode node={node} common={common} />,
-  toggle: (node, content, common) => <ControlNode node={node} common={common} />
+  toggle: (node, content, common) => <ControlNode node={node} common={common} />,
+  rating: (node, content, common) => <RangeNode node={node} common={common} />,
+  slider: (node, content, common) => <RangeNode node={node} common={common} />
 };
+
+function RangeNode({ node, common }) {
+  const p = node.props;
+  const rating = node.type === 'Rating';
+  const editing = Boolean(common.onClick);
+  const [value, setValue] = useState(p.defaultValue);
+  const current = editing ? p.defaultValue : value;
+  const max = rating ? p.items : p.max;
+  const score = `${current} out of ${p.items}`;
+  return <div {...common} className={rating ? 'builder-rating' : 'builder-slider'} data-disabled={p.disabled ? 'true' : undefined}>
+    <label><span>{p.label}</span><input type="range" name={p.name} min={rating ? 0 : p.min} max={max} step={p.step} value={current} disabled={editing || p.disabled} aria-valuetext={rating ? score : undefined} aria-readonly={rating && p.readOnly ? 'true' : undefined} onKeyDown={event => { if (rating && p.readOnly) event.preventDefault(); }} onChange={event => { if (rating && p.readOnly) { event.currentTarget.value = String(current); return; } setValue(Number(event.target.value)); }} /></label>
+    {rating && <span className="builder-rating-stars" aria-hidden="true">{Array.from({ length: p.items }, (_, index) => <span key={index} data-filled={index < current ? 'true' : undefined}>★</span>)}</span>}
+    <output aria-live="polite">{rating ? score : current}</output>
+  </div>;
+}
 
 function ControlNode({ node, common }) {
   const p = node.props;

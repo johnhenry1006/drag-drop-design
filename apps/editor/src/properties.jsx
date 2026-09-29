@@ -71,6 +71,24 @@ function ControlFields({ node, onChange }) {
   </>;
 }
 
+function RangeFields({ node, onChange }) {
+  const p = node.props;
+  const rating = node.type === 'Rating';
+  const set = patch => onChange(node.id, { props: patch });
+  const valid = next => rating
+    ? Number.isInteger(next.items) && next.items >= 1 && next.items <= 20 && Number.isInteger(next.step) && next.step >= 1 && next.items % next.step === 0 && Number.isFinite(next.defaultValue) && next.defaultValue >= 0 && next.defaultValue <= next.items && next.defaultValue % next.step === 0
+    : [next.min, next.max, next.step, next.defaultValue].every(value => Number.isFinite(value) && Math.abs(value) <= 1000000) && next.min <= next.max && next.step > 0 && next.defaultValue >= next.min && next.defaultValue <= next.max && Math.abs((next.defaultValue - next.min) / next.step - Math.round((next.defaultValue - next.min) / next.step)) < 1e-8;
+  const numberField = (key, label) => <label className="field" key={key}><span>{label}</span><input type="number" key={`${node.id}-${key}-${p[key]}`} defaultValue={p[key]} onBlur={event => { const raw = event.target.value; const value = Number(raw); if (raw.trim() && valid({ ...p, [key]: value })) set({ [key]: value }); else event.target.value = p[key]; }} /></label>;
+  return <><label className="field"><span>Field name</span><input key={`${node.id}-name-${p.name}`} defaultValue={p.name} onBlur={event => { if (/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(event.target.value)) set({ name: event.target.value }); else event.target.value = p.name; }} /></label>
+    <label className="field"><span>Accessible label</span><input key={`${node.id}-label-${p.label}`} defaultValue={p.label} onBlur={event => { if (event.target.value.trim() && event.target.value.length <= 200) set({ label: event.target.value }); else event.target.value = p.label; }} /></label>
+    {rating ? numberField('items', 'Rating items (1–20)') : <>{numberField('min', 'Minimum')}{numberField('max', 'Maximum')}</>}
+    {numberField('step', rating ? 'Whole-score step' : 'Step')}{numberField('defaultValue', 'Initial value')}
+    <label className="field"><span><input type="checkbox" checked={p.disabled} onChange={event => set({ disabled: event.target.checked })} /> Disabled</span></label>
+    {rating && <label className="field"><span><input type="checkbox" checked={p.readOnly} onChange={event => set({ readOnly: event.target.checked })} /> Read-only</span></label>}
+    <p className="property-note">Values must fit the range and step. Preview and exports keep visitor changes in local runtime state; no submission is configured.</p>
+  </>;
+}
+
 function ContentTab({ node, location, siblingCount, onChange, onReorder, onRemove, onUploadAsset, assets }) {
   const props = node.props;
   const textLabel = node.type === 'Button' ? 'Button label' : node.type === 'Link' ? 'Link label' : node.type === 'Heading' ? 'Heading text' : 'Text';
@@ -90,6 +108,7 @@ function ContentTab({ node, location, siblingCount, onChange, onReorder, onRemov
     {node.type === 'Table' && <TableFields node={node} onChange={onChange} />}
     {node.type === 'Tooltip' && <>{['trigger', 'content'].map(key => <label className="field" key={key}><span>{key === 'trigger' ? 'Trigger label' : 'Tooltip content'}</span><input defaultValue={props[key]} key={`${node.id}-${key}-${props[key]}`} onBlur={event => { if (event.target.value.trim()) onChange(node.id, { props: { [key]: event.target.value } }); else event.target.value = props[key]; }} /></label>)}{choice('placement', 'Placement', [['top', 'Top'], ['bottom', 'Bottom'], ['left', 'Left'], ['right', 'Right']])}</>}
     {['Checkbox', 'Radio Group', 'Switch', 'Toggle Button'].includes(node.type) && <ControlFields node={node} onChange={onChange} />}
+    {['Rating', 'Slider'].includes(node.type) && <RangeFields node={node} onChange={onChange} />}
     {(node.type === 'Button' || node.type === 'Link') && <label className="field"><span>Link destination</span><input value={props.href} placeholder="#section or https://…" onChange={event => onChange(node.id, { props: { href: event.target.value } })} /></label>}
     <p className="property-note">Export: {registry[node.type].exports.join(', ').toUpperCase()}. {registry[node.type].exportNote || 'Static content and styles are supported.'}</p>
     <div className="property-divider" /><h3>Order in parent</h3><div className="order-actions"><button disabled={location.index === 0} onClick={() => onReorder(node.id, location.index - 1)}>↑ Move up</button><button disabled={location.index >= siblingCount - 1} onClick={() => onReorder(node.id, location.index + 1)}>↓ Move down</button></div><button className="remove-node" onClick={() => onRemove(node.id)}>Remove selected node</button>

@@ -177,3 +177,5 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .login-shell input { display: block; width: 100%; margin-top: 7px; padding: 10px; border: 1px solid #dce3ee; border-radius: 7px; }
 .login-shell button { width: 100%; margin-top: 12px; padding: 11px; border: 0; border-radius: 7px; background: #4f6fdd; color: white; font-weight: 700; }
 .login-shell [role=alert] { color: #a33842; }
+
+.builder-rating,.builder-slider{display:inline-flex;flex-direction:column;gap:5px;min-width:180px;color:#334155}.builder-rating label,.builder-slider label{display:flex;flex-direction:column;gap:5px;font-weight:600}.builder-rating input,.builder-slider input{width:100%;margin:0;accent-color:#315bd6;cursor:pointer}.builder-rating input:focus-visible,.builder-slider input:focus-visible{outline:3px solid #2149bd;outline-offset:3px}.builder-rating-stars{display:flex;gap:2px;font-size:24px;color:#aeb8c8;line-height:1}.builder-rating-stars [data-filled="true"]{color:#e8a317}.builder-rating output,.builder-slider output{font-size:.875em;font-weight:600}.builder-rating[data-disabled="true"],.builder-slider[data-disabled="true"]{opacity:.55}

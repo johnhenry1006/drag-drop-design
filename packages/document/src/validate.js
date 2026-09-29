@@ -5,8 +5,8 @@ import { iconIds } from './icons.js';
 
 const plain = value => value !== null && typeof value === 'object' && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 const identifier = value => typeof value === 'string' && /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(value);
-const newTypes = new Set(['Avatar', 'Badge', 'Chip', 'Icons', 'Lists', 'Table', 'Tooltip', 'Checkbox', 'Radio Group', 'Switch', 'Toggle Button']);
-const controlTypes = new Set(['Checkbox', 'Radio Group', 'Switch', 'Toggle Button']);
+const newTypes = new Set(['Avatar', 'Badge', 'Chip', 'Icons', 'Lists', 'Table', 'Tooltip', 'Checkbox', 'Radio Group', 'Switch', 'Toggle Button', 'Rating', 'Slider']);
+const controlTypes = new Set(['Checkbox', 'Radio Group', 'Switch', 'Toggle Button', 'Rating', 'Slider']);
 const stringField = (value, max = 200) => typeof value === 'string' && value.length <= max;
 const integerField = (value, min, max) => Number.isInteger(value) && value >= min && value <= max;
 const colorField = value => typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value);
@@ -16,6 +16,8 @@ const validItems = value => Array.isArray(value) && value.length <= 100 && uniqu
 const validColumns = value => Array.isArray(value) && value.length >= 1 && value.length <= 20 && uniqueIds(value) && value.every(column => exactKeys(column, ['id', 'label']) && identifier(column.id) && stringField(column.label, 200) && column.label.trim());
 const validRows = value => Array.isArray(value) && value.length <= 100 && uniqueIds(value) && value.every(row => exactKeys(row, ['id', 'cells']) && identifier(row.id) && plain(row.cells) && Object.values(row.cells).every(cell => stringField(cell, 1000)));
 const validOptions = value => Array.isArray(value) && value.length >= 1 && value.length <= 50 && uniqueIds(value) && value.every(option => exactKeys(option, ['id', 'label', 'value']) && identifier(option.id) && stringField(option.label, 200) && option.label.trim() && stringField(option.value, 100) && option.value.trim()) && new Set(value.map(option => option.value)).size === value.length;
+const finiteNumber = value => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= 1000000;
+const aligned = (value, min, step) => Math.abs((value - min) / step - Math.round((value - min) / step)) < 1e-8;
 
 function validNewProp(type, key, value) {
   if (type === 'Avatar') {
@@ -43,6 +45,15 @@ function validNewProp(type, key, value) {
     return key === 'columns' ? validColumns(value) : validRows(value);
   }
   if (type === 'Tooltip') return key === 'placement' ? ['top', 'bottom', 'left', 'right'].includes(value) : stringField(value, 500) && Boolean(value.trim());
+  if (type === 'Rating' || type === 'Slider') {
+    if (key === 'name') return typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(value);
+    if (key === 'label') return stringField(value, 200) && Boolean(value.trim());
+    if (key === 'disabled' || key === 'readOnly') return typeof value === 'boolean';
+    if (key === 'items') return integerField(value, 1, 20);
+    if (key === 'step') return type === 'Rating' ? integerField(value, 1, 20) : finiteNumber(value) && value > 0;
+    if (key === 'min' || key === 'max' || key === 'defaultValue') return finiteNumber(value);
+    return false;
+  }
   if (controlTypes.has(type)) {
     if (key === 'name') return typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(value);
     if (key === 'label') return stringField(value, 200) && Boolean(value.trim());
@@ -120,6 +131,8 @@ function validateNode(node, path, ids, fieldNames) {
     }
   }
   if (node.type === 'Radio Group' && !node.props.options.some(option => option.value === node.props.defaultValue)) throw new Error(`${path}.props.defaultValue must match an option`);
+  if (node.type === 'Rating' && (node.props.step > node.props.items || node.props.items % node.props.step !== 0 || node.props.defaultValue < 0 || node.props.defaultValue > node.props.items || !aligned(node.props.defaultValue, 0, node.props.step))) throw new Error(`${path}.props rating score must be within 0..items and aligned to step`);
+  if (node.type === 'Slider' && (node.props.min > node.props.max || node.props.defaultValue < node.props.min || node.props.defaultValue > node.props.max || !aligned(node.props.defaultValue, node.props.min, node.props.step))) throw new Error(`${path}.props slider range or initial value is invalid`);
   if (controlTypes.has(node.type)) {
     if (fieldNames.has(node.props.name)) throw new Error(`${path}.props.name duplicates another field`);
     fieldNames.add(node.props.name);

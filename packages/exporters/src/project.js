@@ -1,6 +1,6 @@
 import { posix } from 'node:path';
 import { documentCss, normalizePagePath, regions, registry, supportedStyles, validateDocument } from '@builder/document';
-import { avatarFallbackScript, classFor, componentCss, contentCss, controlRuntimeScript, escapeHtml, formCss, htmlRegions, jsxRegions, packageFile, reactControlComponents, reactTooltipComponent, tooltipRuntimeScript, vueControlComponents, vueRegions, vueTooltipComponent } from './index.js';
+import { avatarFallbackScript, classFor, componentCss, contentCss, controlRuntimeScript, escapeHtml, formCss, htmlRegions, jsxRegions, packageFile, rangeCss, rangeRuntimeScript, reactControlComponents, reactRangeComponents, reactTooltipComponent, tooltipRuntimeScript, vueControlComponents, vueRangeComponents, vueRegions, vueTooltipComponent } from './index.js';
 
 const targets = new Set(['html', 'react', 'vue']);
 const mediaExtensions = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
@@ -115,7 +115,7 @@ function urlMapper(target, page, assetsById) {
 }
 
 const baseCss = '*{box-sizing:border-box}html,body,#app{margin:0;min-height:100%}a{text-decoration:none}.region-footer{background:#172b58}.page-region{min-height:75px}\n';
-const projectCss = pages => baseCss + componentCss + contentCss + formCss + pages.map(page => {
+const projectCss = pages => baseCss + componentCss + contentCss + formCss + rangeCss + pages.map(page => {
   const scope = `.${pageClass(page)}`;
   return `${scope}{background:#fff;max-width:1440px;margin:0 auto}${documentCss(page.document, id => id === page.document.id ? scope : `${scope} .${classFor(id)}`)}`;
 }).join('\n');
@@ -139,7 +139,7 @@ export function buildProjectFiles(target, pages, assets = []) {
     Object.assign(files, htmlScripts());
     files['avatar.js'] = avatarFallbackScript;
     files['tooltip.js'] = tooltipRuntimeScript;
-    files['controls.js'] = controlRuntimeScript;
+    files['controls.js'] = controlRuntimeScript + rangeRuntimeScript;
     files['README.md'] = readme(target, pages);
     files['styles.css'] = projectCss(pages);
     for (const page of pages) {
@@ -154,18 +154,18 @@ export function buildProjectFiles(target, pages, assets = []) {
     files['README.md'] = readme(target, pages);
     files['index.html'] = '<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base href="/"><title>Exported site</title></head><body><div id="app"></div><script type="module" src="/src/main.jsx"></script></body></html>\n';
     files['src/styles.css'] = projectCss(pages);
-    files['src/pages.jsx'] = `import React from 'react';\nimport TooltipControl from './tooltip.jsx';\nimport {CheckboxControl,RadioControl,SwitchControl,ToggleControl} from './controls.jsx';\nexport const pages = [${pages.map(page => `{path:${JSON.stringify(page.path)},title:${JSON.stringify(page.document.props.title)},render:()=> <div className=${JSON.stringify(pageClass(page))}>${jsxRegions(page.document, urlMapper(target, page, assetsById))}</div>}`).join(',')}];\n`;
+    files['src/pages.jsx'] = `import React from 'react';\nimport TooltipControl from './tooltip.jsx';\nimport {CheckboxControl,RadioControl,SwitchControl,ToggleControl,RatingControl,SliderControl} from './controls.jsx';\nexport const pages = [${pages.map(page => `{path:${JSON.stringify(page.path)},title:${JSON.stringify(page.document.props.title)},render:()=> <div className=${JSON.stringify(pageClass(page))}>${jsxRegions(page.document, urlMapper(target, page, assetsById))}</div>}`).join(',')}];\n`;
     files['src/tooltip.jsx'] = reactTooltipComponent;
-    files['src/controls.jsx'] = reactControlComponents;
+    files['src/controls.jsx'] = reactControlComponents + reactRangeComponents;
     files['src/main.jsx'] = `import React, { useEffect, useState } from 'react';\nimport { createRoot } from 'react-dom/client';\nimport { pages } from './pages.jsx';\nimport './styles.css';\nconst route = () => window.location.pathname.replace(/\\/$/, '') || '/';\nfunction App(){const [path,setPath]=useState(route);useEffect(()=>{const update=()=>setPath(route());window.addEventListener('popstate',update);return()=>window.removeEventListener('popstate',update)},[]);const page=pages.find(item=>item.path===path);useEffect(()=>{document.title=page?.title||'Not found'},[page]);const navigate=event=>{const anchor=event.target.closest('a[href]');if(!anchor)return;const url=new URL(anchor.href);if(url.origin!==window.location.origin||!pages.some(item=>item.path===(url.pathname.replace(/\\/$/,'')||'/')))return;event.preventDefault();window.history.pushState({},'',url.pathname+url.search+url.hash);setPath(route())};return <div onClick={navigate}>{page?page.render():<main><h1>Page not found</h1><a href="/">Home</a></main>}</div>}\ncreateRoot(document.getElementById('app')).render(<App />);\n`;
   } else {
     files['package.json'] = packageFile('builder-vue-export', { vue: '^3.5.0', vite: '^6.3.0' });
     files['README.md'] = readme(target, pages);
     files['index.html'] = '<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base href="/"><title>Exported site</title></head><body><div id="app"></div><script type="module" src="/src/main.js"></script></body></html>\n';
     files['src/styles.css'] = projectCss(pages);
-    files['src/pages.js'] = `import { h } from 'vue';\nimport TooltipControl from './tooltip.js';\nimport {CheckboxControl,RadioControl,SwitchControl,ToggleControl} from './controls.js';\nexport const pages = [${pages.map(page => `{path:${JSON.stringify(page.path)},title:${JSON.stringify(page.document.props.title)},render:()=>h('div',{class:${JSON.stringify(pageClass(page))}},[${vueRegions(page.document, urlMapper(target, page, assetsById))}])}`).join(',')}];\n`;
+    files['src/pages.js'] = `import { h } from 'vue';\nimport TooltipControl from './tooltip.js';\nimport {CheckboxControl,RadioControl,SwitchControl,ToggleControl,RatingControl,SliderControl} from './controls.js';\nexport const pages = [${pages.map(page => `{path:${JSON.stringify(page.path)},title:${JSON.stringify(page.document.props.title)},render:()=>h('div',{class:${JSON.stringify(pageClass(page))}},[${vueRegions(page.document, urlMapper(target, page, assetsById))}])}`).join(',')}];\n`;
     files['src/tooltip.js'] = vueTooltipComponent;
-    files['src/controls.js'] = vueControlComponents;
+    files['src/controls.js'] = vueControlComponents + vueRangeComponents;
     files['src/main.js'] = `import { createApp, h, ref, onMounted, onUnmounted, watch } from 'vue';\nimport { pages } from './pages.js';\nimport './styles.css';\nconst route=()=>window.location.pathname.replace(/\\/$/,'')||'/';\ncreateApp({setup(){const path=ref(route());const update=()=>{path.value=route()};onMounted(()=>window.addEventListener('popstate',update));onUnmounted(()=>window.removeEventListener('popstate',update));watch(path,()=>{document.title=pages.find(item=>item.path===path.value)?.title||'Not found'},{immediate:true});const navigate=event=>{const anchor=event.target.closest('a[href]');if(!anchor)return;const url=new URL(anchor.href);if(url.origin!==window.location.origin||!pages.some(item=>item.path===(url.pathname.replace(/\\/$/,'')||'/')))return;event.preventDefault();window.history.pushState({},'',url.pathname+url.search+url.hash);update()};return()=>h('div',{onClick:navigate},[pages.find(item=>item.path===path.value)?.render()||h('main',[h('h1','Page not found'),h('a',{href:'/'},'Home')])])}}).mount('#app');\n`;
   }
   const referenced = new Set(referencedAssetIds(pages));
