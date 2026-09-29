@@ -8,6 +8,7 @@ import { createPaletteNode, paletteGroups, paletteItems } from './palette.js';
 import { emptyHistory, recordChange, travel } from './history.js';
 import { PageView } from './render.jsx';
 import { PropertiesPanel } from './properties.jsx';
+import { ProjectManager } from './project-manager.jsx';
 import { insertSuggestion, layoutSuggestions } from './suggestions.js';
 import { api, jsonOptions, uploadImage } from './api.js';
 import './style.css';
@@ -206,6 +207,10 @@ function App() {
   };
   const [savedDocument, setSavedDocument] = useState(null);
   const [projects, setProjects] = useState([]);
+  const [showProjectManager, setShowProjectManager] = useState(false);
+  const [projectManagerBusy, setProjectManagerBusy] = useState(false);
+  const [projectManagerError, setProjectManagerError] = useState('');
+  const projectOpenToken = useRef(0);
   const [pages, setPages] = useState([]);
   const [assets, setAssets] = useState([]);
   const [currentProject, setCurrentProject] = useState(null);
@@ -242,14 +247,22 @@ function App() {
     setStatus({ message: `${page.name} opened at revision ${page.revision}`, tone: 'success' });
   };
   const openProject = async project => {
+    if (!project) throw new Error('Project is no longer available');
+    const token = ++projectOpenToken.current;
     const [{ pages: available }, { assets: storedAssets }] = await Promise.all([api(`/projects/${project.id}/pages`), api(`/projects/${project.id}/assets`)]);
-    setCurrentProject(project); setPages(available); setAssets(storedAssets);
+    if (token !== projectOpenToken.current) return;
     if (available.length) {
       const preferred = available.find(page => page.id === window.localStorage.getItem('builder:lastPageId')) || available[0];
-      activatePage((await api(`/pages/${preferred.id}`)).page);
+      const loaded = (await api(`/pages/${preferred.id}`)).page;
+      if (token !== projectOpenToken.current) return;
+      if (loaded.projectId !== project.id) throw new Error('Selected page belongs to another project');
+      setCurrentProject(project); setPages(available); setAssets(storedAssets); activatePage(loaded);
     }
     else {
+      setCurrentProject(project); setPages([]); setAssets(storedAssets);
       replaceDocument(null); setSavedDocument(null); setCurrentPage(null);
+      window.localStorage.setItem('builder:lastProjectId', project.id);
+      window.localStorage.removeItem('builder:lastPageId');
       setStatus({ message: 'Create a page to start editing', tone: 'info' });
     }
   };
@@ -323,9 +336,15 @@ function App() {
     catch (cause) { setStatus({ message: `Reload failed: ${cause.message}`, tone: 'error' }); }
   };
   const chooseProject = async id => {
-    if (dirty && !window.confirm('Discard unsaved changes and open another project?')) return;
-    try { await openProject(projects.find(project => project.id === id)); }
-    catch (cause) { setStatus({ message: `Open project failed: ${cause.message}`, tone: 'error' }); }
+    if (dirty && !window.confirm('Discard unsaved changes and open another project?')) return false;
+    try { await openProject(projects.find(project => project.id === id)); return true; }
+    catch (cause) { setStatus({ message: `Open project failed: ${cause.message}`, tone: 'error' }); setProjectManagerError(cause.message); return false; }
+  };
+  const refreshProjects = async () => { const available = (await api('/projects')).projects; setProjects(available); return available; };
+  const openProjectManager = async () => {
+    setProjectManagerError(''); setShowProjectManager(true);
+    try { await refreshProjects(); }
+    catch (cause) { setProjectManagerError(`Could not load projects: ${cause.message}`); }
   };
   const choosePage = async id => {
     if (dirty && !window.confirm('Discard unsaved changes and open another page?')) return;
@@ -364,15 +383,49 @@ function App() {
       setStatus({ message: `Page path saved as ${path}`, tone: 'success' });
     } catch (cause) { setStatus({ message: `Path update failed: ${cause.message}`, tone: 'error' }); }
   };
-  const createNewProject = async () => {
-    if (dirty && !window.confirm('Discard unsaved changes and create another project?')) return;
-    const name = window.prompt('Project name', 'New project');
-    if (name === null) return;
+  const createNewProject = async requestedName => {
+    if (dirty && !window.confirm('Discard unsaved changes and create another project?')) return false;
+    const name = typeof requestedName === 'string' ? requestedName : window.prompt('Project name', 'New project');
+    if (name === null) return false;
+    setProjectManagerBusy(true); setProjectManagerError('');
     try {
       const project = (await api('/projects', jsonOptions('POST', { name }))).project;
+      ++projectOpenToken.current;
       setProjects(previous => [...previous, project]); setCurrentProject(project); setPages([]); setAssets([]); replaceDocument(null); setSavedDocument(null); setCurrentPage(null);
+      window.localStorage.setItem('builder:lastProjectId', project.id);
+      window.localStorage.removeItem('builder:lastPageId');
       await createNewPage(project, true);
-    } catch (cause) { setStatus({ message: `Create project failed: ${cause.message}`, tone: 'error' }); }
+      await refreshProjects();
+      return true;
+    } catch (cause) { setStatus({ message: `Create project failed: ${cause.message}`, tone: 'error' }); setProjectManagerError(cause.message); return false; }
+    finally { setProjectManagerBusy(false); }
+  };
+  const renameProject = async (project, name) => {
+    setProjectManagerBusy(true); setProjectManagerError('');
+    try {
+      const updated = (await api(`/projects/${project.id}`, jsonOptions('PATCH', { name, expectedVersion: project.version }))).project;
+      setProjects(previous => previous.map(item => item.id === updated.id ? updated : item));
+      if (currentProject?.id === updated.id) setCurrentProject(updated);
+      setStatus({ message: `Renamed project to ${updated.name}`, tone: 'success' });
+      return true;
+    } catch (cause) { setProjectManagerError(cause.message); await refreshProjects().catch(() => {}); return false; }
+    finally { setProjectManagerBusy(false); }
+  };
+  const removeProject = async (project, confirmation) => {
+    if (dirty && currentProject?.id === project.id) { setProjectManagerError('Save or discard unsaved page edits before deleting this project.'); return false; }
+    setProjectManagerBusy(true); setProjectManagerError('');
+    try {
+      await api(`/projects/${project.id}`, jsonOptions('DELETE', { name: confirmation, expectedVersion: project.version, expectedCounts: { pageCount: project.pageCount, revisionCount: project.revisionCount, assetCount: project.assetCount } }));
+      const remaining = await refreshProjects();
+      if (currentProject?.id === project.id) {
+        const next = remaining[0];
+        if (next) await openProject(next);
+        else { ++projectOpenToken.current; replaceDocument(null); setSavedDocument(null); setCurrentProject(null); setCurrentPage(null); setPages([]); setAssets([]); window.localStorage.removeItem('builder:lastProjectId'); window.localStorage.removeItem('builder:lastPageId'); }
+      }
+      setStatus({ message: `Deleted project ${project.name}`, tone: 'success' });
+      return true;
+    } catch (cause) { setProjectManagerError(cause.message); await refreshProjects().catch(() => {}); return false; }
+    finally { setProjectManagerBusy(false); }
   };
   const saveAsCopy = async () => {
     const name = window.prompt('Name for a copy of this page', `${currentPage.name} copy`);
@@ -455,7 +508,8 @@ function App() {
   if (auth?.enabled && !auth.user) return <main className="login-shell"><form onSubmit={login}><h1>Sign in to Builder</h1><label>Email<input type="email" required autoComplete="username" value={loginEmail} onChange={event => setLoginEmail(event.target.value)} /></label><label>Password<input type="password" required autoComplete="current-password" value={loginPassword} onChange={event => setLoginPassword(event.target.value)} /></label>{loginError && <p role="alert">{loginError}</p>}<button type="submit">Sign in</button></form></main>;
   return <div className="app-shell">
     <header className="app-header"><div className="app-brand"><span className="brand-mark">✦</span><strong>Northstar Builder</strong>{auth?.user && <button className="toolbar-button" onClick={logout}>Sign out</button>}</div>
-      <div className="header-actions"><select aria-label="Project" value={currentProject?.id || ''} onChange={event => chooseProject(event.target.value)} disabled={!projects.length}>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select><button className="toolbar-button" onClick={createNewProject}>New project</button><select aria-label="Page" value={currentPage?.id || ''} onChange={event => choosePage(event.target.value)} disabled={!pages.length}>{pages.map(page => <option key={page.id} value={page.id}>{page.name} · {page.path}</option>)}</select><button className="toolbar-button" disabled={!currentProject} onClick={() => createNewPage(currentProject)}>New page</button><button className="toolbar-button" disabled={!currentPage} onClick={changePagePath}>Path</button><span className={`save-indicator ${dirty ? 'dirty' : ''}`} data-save-state={dirty ? 'unsaved' : 'saved'}>{dirty ? 'Unsaved changes' : currentPage ? `Saved · v${currentPage.revision}` : 'No page'}</span><button className="toolbar-button" disabled={!history.past.length || preview} onClick={() => navigateHistory('undo')} title="Undo (Ctrl/⌘+Z)">Undo</button><button className="toolbar-button" disabled={!history.future.length || preview} onClick={() => navigateHistory('redo')} title="Redo (Ctrl/⌘+Shift+Z)">Redo</button><button className="toolbar-button" disabled={!selectedId && !selectedRegion || preview} onClick={() => { setSelectedId(null); setSelectedRegion(null); }} title="Clear selection (Escape)">Clear selection</button><button className="toolbar-button" disabled={!dirty || saving || uploading || !currentPage} onClick={save}>{uploading ? 'Uploading…' : saving ? 'Saving…' : 'Save'}</button>{conflict && <button className="toolbar-button" onClick={saveAsCopy}>Save as copy</button>}<button className="toolbar-button" disabled={!currentPage} onClick={reloadPage}>Reload</button><button className="toolbar-button" disabled={!currentPage || preview} onClick={showHistory}>Revisions</button><button className="toolbar-button" disabled={!currentProject || preview || uploading} onClick={() => setShowExport(true)}>Export</button><button className="toolbar-button" disabled={!document} onClick={download}>Download JSON</button><button className="view-button" disabled={!document} onClick={togglePreview}>{preview ? 'Back to editor' : 'Preview page'}</button></div></header>
+      <div className="header-actions"><select aria-label="Project" value={currentProject?.id || ''} onChange={event => chooseProject(event.target.value)} disabled={!projects.length}>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select><button className="toolbar-button" onClick={openProjectManager}>Projects</button><button className="toolbar-button" onClick={() => createNewProject()}>New project</button><select aria-label="Page" value={currentPage?.id || ''} onChange={event => choosePage(event.target.value)} disabled={!pages.length}>{pages.map(page => <option key={page.id} value={page.id}>{page.name} · {page.path}</option>)}</select><button className="toolbar-button" disabled={!currentProject} onClick={() => createNewPage(currentProject)}>New page</button><button className="toolbar-button" disabled={!currentPage} onClick={changePagePath}>Path</button><span className={`save-indicator ${dirty ? 'dirty' : ''}`} data-save-state={dirty ? 'unsaved' : 'saved'}>{dirty ? 'Unsaved changes' : currentPage ? `Saved · v${currentPage.revision}` : 'No page'}</span><button className="toolbar-button" disabled={!history.past.length || preview} onClick={() => navigateHistory('undo')} title="Undo (Ctrl/⌘+Z)">Undo</button><button className="toolbar-button" disabled={!history.future.length || preview} onClick={() => navigateHistory('redo')} title="Redo (Ctrl/⌘+Shift+Z)">Redo</button><button className="toolbar-button" disabled={!selectedId && !selectedRegion || preview} onClick={() => { setSelectedId(null); setSelectedRegion(null); }} title="Clear selection (Escape)">Clear selection</button><button className="toolbar-button" disabled={!dirty || saving || uploading || !currentPage} onClick={save}>{uploading ? 'Uploading…' : saving ? 'Saving…' : 'Save'}</button>{conflict && <button className="toolbar-button" onClick={saveAsCopy}>Save as copy</button>}<button className="toolbar-button" disabled={!currentPage} onClick={reloadPage}>Reload</button><button className="toolbar-button" disabled={!currentPage || preview} onClick={showHistory}>Revisions</button><button className="toolbar-button" disabled={!currentProject || preview || uploading} onClick={() => setShowExport(true)}>Export</button><button className="toolbar-button" disabled={!document} onClick={download}>Download JSON</button><button className="view-button" disabled={!document} onClick={togglePreview}>{preview ? 'Back to editor' : 'Preview page'}</button></div></header>
+    {showProjectManager && <ProjectManager projects={projects} currentProjectId={currentProject?.id} onClose={() => setShowProjectManager(false)} onCreate={createNewProject} onOpen={async id => { if (await chooseProject(id)) setShowProjectManager(false); }} onRename={renameProject} onDelete={removeProject} busy={projectManagerBusy} error={projectManagerError} />}
     {showRevisions && !preview && <div className="revision-popover"><strong>Page revisions</strong><p>Restoring creates a new revision.</p><label>Restore from<select aria-label="Revision to restore" value={chosenRevision} onChange={event => setChosenRevision(event.target.value)}>{revisions.map(item => <option key={item.revision} value={item.revision}>Revision {item.revision}</option>)}</select></label><button onClick={restore} disabled={!chosenRevision}>Restore revision</button></div>}
     {showExport && !preview && <div className="export-backdrop" role="presentation"><section className="export-dialog" role="dialog" aria-label="Export project"><div className="export-heading"><h2>Export project</h2><button aria-label="Close export" onClick={() => setShowExport(false)}>×</button></div><p>Download all saved pages and referenced assets as a source project.</p><label>Target<select aria-label="Export target" value={exportTarget} onChange={event => setExportTarget(event.target.value)}><option value="html">HTML5</option><option value="react">React JavaScript/JSX</option><option value="vue">Vue JavaScript</option></select></label>{dirty ? <p className="export-warning">Save the current page before exporting. Unsaved edits are not included.</p> : !exportReport && !exportError ? <p>Checking saved pages…</p> : exportReport && <><h3>Pages</h3><ul>{exportReport.pages.map(page => <li key={page.id}>{page.path} — {page.name}</li>)}</ul>{exportReport.issues.length ? <><h3>Resolve before download</h3><ul className="export-issues">{exportReport.issues.map((item, index) => <li key={index}>{item.pagePath || 'Project'}{item.nodeId ? ` · ${item.nodeId}` : ''} · {item.property}: {item.message}</li>)}</ul></> : <p className="export-ready">Ready to export {exportReport.pages.length} page(s).</p>}</>}{exportError && <p className="field-error" role="alert">{exportError}</p>}<button className="view-button" disabled={dirty || !exportReport || exportReport.issues.length > 0 || exportBusy} onClick={downloadExport}>{exportBusy ? 'Generating…' : 'Download ZIP'}</button></section></div>}
     <div className={`status-bar ${status.tone}`} role="status">{status.message}</div>

@@ -7,7 +7,7 @@ import { checkDatabase, pool } from './db.js';
 import { assetContents } from './store.js';
 import { checkObjectStore } from './object-store.js';
 import { authMode, clearCookie, cookie, currentUser, ownsAsset, ownsPage, ownsProject, sessionToken, signIn, signOut } from './auth.js';
-import { createAsset, createPage, createProject, getAsset, getPage, getProject, getRevision, listAssets, listPages, listProjects, listRevisions, migrate, projectExportAssets, projectExportData, restorePage, savePage, updateProject, validDocument } from './store.js';
+import { createAsset, createPage, createProject, deleteProject, drainAssetObjectDeletions, getAsset, getPage, getProject, getRevision, listAssets, listPages, listProjects, listRevisions, migrate, projectExportAssets, projectExportData, restorePage, savePage, updateProject, validDocument } from './store.js';
 
 export const app = Fastify({ logger: process.env.NODE_ENV !== 'test', bodyLimit: 2 * 1024 * 1024, requestTimeout: 30000, trustProxy: process.env.TRUST_PROXY === 'true' });
 const missing = (reply, kind) => reply.code(404).send({ error: `${kind} not found` });
@@ -82,15 +82,25 @@ app.post('/api/auth/logout', async (request, reply) => {
 app.get('/api/health/db', async () => ({ ok: await checkDatabase() }));
 app.get('/api/sample-page', async () => validDocument(samplePage));
 
-app.get('/api/projects', async request => ({ projects: await listProjects(request.user?.id || null) }));
-app.post('/api/projects', async (request, reply) => reply.code(201).send({ project: await createProject(request.body?.name, request.user?.id || null) }));
+const withAccess = (project, request) => ({ ...project, access: request.user ? 'Owner' : 'Local access' });
+app.get('/api/projects', async request => ({ projects: (await listProjects(request.user?.id || null)).map(project => withAccess(project, request)) }));
+app.post('/api/projects', async (request, reply) => reply.code(201).send({ project: withAccess(await createProject(request.body?.name, request.user?.id || null), request) }));
 app.get('/api/projects/:projectId', async (request, reply) => {
   const project = await getProject(uuid(request.params.projectId));
-  return project ? { project } : missing(reply, 'Project');
+  return project ? { project: withAccess(project, request) } : missing(reply, 'Project');
 });
 app.patch('/api/projects/:projectId', async (request, reply) => {
-  const project = await updateProject(uuid(request.params.projectId), request.body?.name);
-  return project ? { project } : missing(reply, 'Project');
+  const result = await updateProject(uuid(request.params.projectId), request.body?.name, request.body?.expectedVersion);
+  if (result.project) return { project: withAccess(result.project, request) };
+  if (!result.current) return missing(reply, 'Project');
+  return reply.code(409).send({ error: 'Project changed. Reload and try again.', currentVersion: result.current.version });
+});
+app.delete('/api/projects/:projectId', async (request, reply) => {
+  const result = await deleteProject(uuid(request.params.projectId), request.body?.name, request.body?.expectedVersion, request.body?.expectedCounts);
+  if (result.missing) return missing(reply, 'Project');
+  if (result.conflict) return reply.code(409).send({ error: 'Project name or contents changed. Reload its details before deleting.' });
+  await drainAssetObjectDeletions().catch(error => request.log.error(error));
+  return { deleted: true, affected: result.counts };
 });
 app.get('/api/projects/:projectId/pages', async (request, reply) => {
   const id = uuid(request.params.projectId);
@@ -194,6 +204,8 @@ if (process.env.NODE_ENV !== 'test') {
     }
     await migrate();
     await app.listen({ port: Number(process.env.API_PORT || 3001), host: process.env.API_HOST || (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1') });
+    await drainAssetObjectDeletions();
+    setInterval(() => drainAssetObjectDeletions().catch(error => app.log.error(error)), 60000).unref();
   } catch (error) {
     app.log.error(error);
     await app.close(); await pool.end();

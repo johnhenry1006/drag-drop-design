@@ -5,7 +5,7 @@ import { normalizePagePath, samplePage, validateDocument } from '@builder/docume
 import { pool } from './db.js';
 import { assetBucket, assetStorageMode, deleteObject, getObject, putObject } from './object-store.js';
 
-const migrations = ['001_baseline', '002_accounts_storage', '003_asset_bucket'].map((name, index) => ({ version: index + 1, path: fileURLToPath(new URL(`./migrations/${name}.sql`, import.meta.url)) }));
+const migrations = ['001_baseline', '002_accounts_storage', '003_asset_bucket', '004_project_management'].map((name, index) => ({ version: index + 1, path: fileURLToPath(new URL(`./migrations/${name}.sql`, import.meta.url)) }));
 export const assetUrl = id => `/api/assets/${id}/content`;
 
 export const sampleProjectId = '00000000-0000-4000-8000-000000000001';
@@ -52,17 +52,59 @@ function validPath(value) {
   catch (error) { throw Object.assign(error, { statusCode: 400 }); }
 }
 
-const projectColumns = 'id, name, created_at AS "createdAt", updated_at AS "updatedAt"';
+const projectColumns = 'p.id, p.name, p.version, p.created_at AS "createdAt", p.updated_at AS "updatedAt", GREATEST(p.updated_at, COALESCE(pg.last_updated, p.updated_at), COALESCE(a.last_updated, p.updated_at)) AS "lastUpdatedAt", COALESCE(pg.page_count, 0)::integer AS "pageCount", COALESCE(pg.revision_count, 0)::integer AS "revisionCount", COALESCE(a.asset_count, 0)::integer AS "assetCount"';
+const projectFrom = `FROM projects p LEFT JOIN LATERAL (SELECT COUNT(*) AS page_count, MAX(updated_at) AS last_updated, (SELECT COUNT(*) FROM page_revisions pr JOIN pages rp ON rp.id=pr.page_id WHERE rp.project_id=p.id) AS revision_count FROM pages WHERE project_id=p.id) pg ON true LEFT JOIN LATERAL (SELECT COUNT(*) AS asset_count, MAX(created_at) AS last_updated FROM assets WHERE project_id=p.id) a ON true`;
 const pageColumns = 'id, project_id AS "projectId", name, path, document, revision, created_at AS "createdAt", updated_at AS "updatedAt"';
 const assetColumns = 'id, project_id AS "projectId", filename, media_type AS "mediaType", byte_length AS "byteLength", sha256, created_at AS "createdAt"';
 
-export async function listProjects(ownerId = null) { return (await pool.query(`SELECT ${projectColumns} FROM projects WHERE ($1::uuid IS NULL OR owner_id=$1) ORDER BY created_at, id`, [ownerId])).rows; }
-export async function getProject(id) { return (await pool.query(`SELECT ${projectColumns} FROM projects WHERE id=$1`, [id])).rows[0] || null; }
+export async function listProjects(ownerId = null) { return (await pool.query(`SELECT ${projectColumns} ${projectFrom} WHERE ($1::uuid IS NULL OR p.owner_id=$1) ORDER BY p.created_at, p.id`, [ownerId])).rows; }
+export async function getProject(id) { return (await pool.query(`SELECT ${projectColumns} ${projectFrom} WHERE p.id=$1`, [id])).rows[0] || null; }
 export async function createProject(name, ownerId = null) {
-  return (await pool.query(`INSERT INTO projects(id,name,owner_id) VALUES($1,$2,$3) RETURNING ${projectColumns}`, [randomUUID(), validName(name, 'Project name'), ownerId])).rows[0];
+  const id = randomUUID();
+  await pool.query('INSERT INTO projects(id,name,owner_id) VALUES($1,$2,$3)', [id, validName(name, 'Project name'), ownerId]);
+  return getProject(id);
 }
-export async function updateProject(id, name) {
-  return (await pool.query(`UPDATE projects SET name=$2, updated_at=now() WHERE id=$1 RETURNING ${projectColumns}`, [id, validName(name, 'Project name')])).rows[0] || null;
+export async function updateProject(id, name, expectedVersion) {
+  if (!Number.isInteger(expectedVersion) || expectedVersion < 1) throw Object.assign(new Error('expectedVersion must be a positive integer'), { statusCode: 400 });
+  const result = await pool.query('UPDATE projects SET name=$2, version=version+1, updated_at=now() WHERE id=$1 AND version=$3 RETURNING id', [id, validName(name, 'Project name'), expectedVersion]);
+  return result.rowCount ? { project: await getProject(id) } : { project: null, current: await getProject(id) };
+}
+
+export async function deleteProject(id, name, expectedVersion, expectedCounts) {
+  if (!Number.isInteger(expectedVersion) || expectedVersion < 1) throw Object.assign(new Error('expectedVersion must be a positive integer'), { statusCode: 400 });
+  if (typeof name !== 'string' || !name.trim() || name.length > 120) throw Object.assign(new Error('Confirmed project name is required'), { statusCode: 400 });
+  if (!expectedCounts || ['pageCount', 'revisionCount', 'assetCount'].some(key => !Number.isInteger(expectedCounts[key]) || expectedCounts[key] < 0)) throw Object.assign(new Error('Expected project counts are required'), { statusCode: 400 });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const locked = (await client.query('SELECT id, name, version FROM projects WHERE id=$1 FOR UPDATE', [id])).rows[0];
+    if (!locked) { await client.query('ROLLBACK'); return { missing: true }; }
+    const counts = (await client.query(`SELECT (SELECT count(*) FROM pages WHERE project_id=$1)::integer AS "pageCount", (SELECT count(*) FROM page_revisions pr JOIN pages pg ON pg.id=pr.page_id WHERE pg.project_id=$1)::integer AS "revisionCount", (SELECT count(*) FROM assets WHERE project_id=$1)::integer AS "assetCount"`, [id])).rows[0];
+    if (locked.name !== name || locked.version !== expectedVersion || Object.keys(counts).some(key => counts[key] !== expectedCounts[key])) { await client.query('ROLLBACK'); return { conflict: true }; }
+    const objects = (await client.query('SELECT DISTINCT object_bucket AS bucket, object_key AS key FROM assets WHERE project_id=$1 AND object_key IS NOT NULL', [id])).rows;
+    for (const object of objects) {
+      if (!object.bucket) throw Object.assign(new Error('Asset object bucket is missing; deletion stopped'), { statusCode: 409 });
+      const shared = await client.query('SELECT 1 FROM assets WHERE project_id<>$1 AND object_bucket=$2 AND object_key=$3 LIMIT 1', [id, object.bucket, object.key]);
+      if (!shared.rowCount) await client.query('INSERT INTO asset_object_deletions(object_bucket,object_key) VALUES($1,$2) ON CONFLICT DO NOTHING', [object.bucket, object.key]);
+    }
+    await client.query('DELETE FROM projects WHERE id=$1', [id]);
+    await client.query('COMMIT');
+    return { deleted: true, counts };
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
+}
+
+export async function drainAssetObjectDeletions() {
+  const jobs = (await pool.query('SELECT id, object_bucket AS bucket, object_key AS key FROM asset_object_deletions ORDER BY id LIMIT 100')).rows;
+  for (const job of jobs) {
+    const shared = await pool.query('SELECT 1 FROM assets WHERE object_bucket=$1 AND object_key=$2 LIMIT 1', [job.bucket, job.key]);
+    if (!shared.rowCount) {
+      try { await deleteObject(job.key, job.bucket); }
+      catch { continue; }
+    }
+    await pool.query('DELETE FROM asset_object_deletions WHERE id=$1', [job.id]);
+  }
+  return jobs.length;
 }
 
 export async function listPages(projectId) {

@@ -1,0 +1,73 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { chromium } from 'playwright-core';
+import { samplePage } from '@builder/document';
+import { pool } from '../../api/src/db.js';
+
+const api = 'http://127.0.0.1:3001/api';
+const send = async (path, options) => { const response = await fetch(api + path, options); if (!response.ok) throw new Error(`${path}: ${response.status} ${await response.text()}`); return response.json(); };
+const json = (method, body) => ({ method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
+test('project list creates, searches, renames, selects, and deletes without crossing page sets', { timeout: 60000 }, async () => {
+  const ids = [];
+  const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || '/usr/bin/google-chrome', headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+  try {
+    const alpha = (await send('/projects', json('POST', { name: `Alpha ${Date.now()}` }))).project; ids.push(alpha.id);
+    const beta = (await send('/projects', json('POST', { name: `Beta ${Date.now()}` }))).project; ids.push(beta.id);
+    for (const [project, names] of [[alpha, ['Home', 'About']], [beta, ['Home']]]) for (const name of names) await send(`/projects/${project.id}/pages`, json('POST', { name, path: name === 'Home' ? '/' : '/about', document: samplePage }));
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const prompts = ['Gamma home', '/'];
+    page.on('dialog', dialog => dialog.accept(prompts.shift() || ''));
+    await page.goto(process.env.EDITOR_URL || 'http://127.0.0.1:5173/');
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Manage projects' });
+    await dialog.getByLabel('Project name').fill('Gamma managed');
+    await dialog.getByRole('button', { name: 'Create project' }).click();
+    await dialog.getByText('Gamma managed', { exact: true }).waitFor();
+    const gamma = (await send('/projects')).projects.find(project => project.name === 'Gamma managed'); ids.push(gamma.id);
+    assert.equal(gamma.pageCount, 1);
+    await dialog.getByLabel('Search projects').fill(alpha.name);
+    assert.equal(await dialog.locator('.project-manager-list li').count(), 1);
+    const alphaRow = dialog.locator('.project-manager-list li').first();
+    assert.match(await alphaRow.innerText(), /2 pages/);
+    await alphaRow.getByRole('button', { name: 'Rename' }).click();
+    await alphaRow.getByLabel('New name').fill('Renamed alpha');
+    await alphaRow.getByRole('button', { name: 'Save name' }).click();
+    await dialog.getByLabel('Search projects').fill('Renamed alpha');
+    await dialog.getByText('Renamed alpha', { exact: true }).waitFor();
+    const betaCurrent = (await send(`/projects/${beta.id}`)).project;
+    await send(`/projects/${beta.id}`, json('PATCH', { name: `${beta.name} updated elsewhere`, expectedVersion: betaCurrent.version }));
+    await dialog.getByLabel('Search projects').fill(beta.name);
+    assert.match(await dialog.locator('.project-manager-list li').innerText(), /1 page/);
+    await dialog.locator('.project-manager-list li').getByRole('button', { name: 'Rename' }).click();
+    await dialog.getByLabel('New name').fill('Stale rename');
+    await dialog.getByRole('button', { name: 'Save name' }).click();
+    await dialog.getByRole('alert').getByText('Project changed', { exact: false }).waitFor();
+    await dialog.locator('.project-manager-list li').getByRole('button', { name: 'Open' }).click();
+    await page.waitForFunction(id => document.querySelector('select[aria-label="Project"]')?.value === id, beta.id);
+    assert.equal(await page.getByRole('combobox', { name: 'Project' }).inputValue(), beta.id);
+    assert.equal(await page.getByRole('combobox', { name: 'Page' }).locator('option').count(), 1);
+    await page.getByRole('combobox', { name: 'Project' }).selectOption(alpha.id);
+    await page.waitForFunction(id => document.querySelector('select[aria-label="Project"]')?.value === id, alpha.id);
+    assert.equal(await page.getByRole('combobox', { name: 'Page' }).locator('option').count(), 2);
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
+    await dialog.getByLabel('Search projects').fill('Renamed alpha');
+    const row = dialog.locator('.project-manager-list li').first();
+    await row.getByRole('button', { name: 'Delete', exact: true }).click();
+    assert.match(await row.innerText(), /2 pages, 2 revisions, and 0 assets/);
+    await row.getByLabel('Confirm project name').fill('Renamed alpha');
+    await row.getByRole('button', { name: 'Delete project permanently' }).click();
+    await dialog.getByText('No projects match', { exact: false }).waitFor();
+    assert.equal((await send('/projects')).projects.some(project => project.id === alpha.id), false);
+    const selectedProjectId = await page.getByRole('combobox', { name: 'Project' }).inputValue();
+    assert.notEqual(selectedProjectId, alpha.id);
+    const selectedPages = (await send(`/projects/${selectedProjectId}/pages`)).pages;
+    const visiblePageIds = await page.getByRole('combobox', { name: 'Page' }).locator('option').evaluateAll(options => options.map(option => option.value));
+    assert.deepEqual(visiblePageIds, selectedPages.map(item => item.id));
+    await page.close();
+  } finally {
+    await browser.close();
+    await pool.query('DELETE FROM projects WHERE id=ANY($1::uuid[])', [ids]);
+    await pool.end();
+  }
+});
