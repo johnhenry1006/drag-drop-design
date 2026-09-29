@@ -23,8 +23,28 @@ const renderers = {
   toggle: (node, content, common) => <ControlNode node={node} common={common} />,
   rating: (node, content, common) => <RangeNode node={node} common={common} />,
   slider: (node, content, common) => <RangeNode node={node} common={common} />,
-  autocomplete: (node, content, common) => <AutocompleteNode node={node} common={common} />
+  autocomplete: (node, content, common) => <AutocompleteNode node={node} common={common} />,
+  transfer: (node, content, common) => <TransferNode node={node} common={common} />
 };
+
+function TransferNode({ node, common }) {
+  const p = node.props;
+  const editing = Boolean(common.onClick);
+  const [rightIds, setRightIds] = useState(p.defaultRightIds);
+  const [picked, setPicked] = useState([]);
+  const right = editing ? p.defaultRightIds : rightIds;
+  const selected = editing ? [] : picked;
+  const leftOptions = p.options.filter(option => !right.includes(option.id));
+  const rightOptions = p.options.filter(option => right.includes(option.id));
+  const toggle = id => setPicked(ids => ids.includes(id) ? ids.filter(item => item !== id) : [...ids, id]);
+  const move = direction => {
+    const moving = (direction === 'right' ? leftOptions : rightOptions).filter(option => selected.includes(option.id)).map(option => option.id);
+    setRightIds(ids => direction === 'right' ? [...ids, ...moving] : ids.filter(id => !moving.includes(id)));
+    setPicked(ids => ids.filter(id => !moving.includes(id)));
+  };
+  const group = (options, label) => <fieldset className="builder-transfer-group" disabled={editing || p.disabled}><legend>{label} <span className="builder-transfer-count">({options.length} items, {options.filter(option => selected.includes(option.id)).length} selected)</span></legend><ul>{options.length ? options.map(option => <li key={option.id}><label><input type="checkbox" aria-label={`${option.label} · ${option.value}`} checked={selected.includes(option.id)} onChange={() => toggle(option.id)} /><span>{option.label}</span><small>{option.value}</small></label></li>) : <li className="builder-transfer-empty">No items</li>}</ul></fieldset>;
+  return <div {...common} className="builder-transfer" role="group" aria-label={p.label} data-edit={editing ? 'true' : undefined} data-disabled={p.disabled ? 'true' : undefined}><div className="builder-transfer-layout">{group(leftOptions, p.leftLabel)}<div className="builder-transfer-actions"><button type="button" disabled={editing || p.disabled || !leftOptions.some(option => selected.includes(option.id))} onClick={() => move('right')}>Move right →</button><button type="button" disabled={editing || p.disabled || !rightOptions.some(option => selected.includes(option.id))} onClick={() => move('left')}>← Move left</button></div>{group(rightOptions, p.rightLabel)}</div></div>;
+}
 
 function AutocompleteNode({ node, common }) {
   const p = node.props;

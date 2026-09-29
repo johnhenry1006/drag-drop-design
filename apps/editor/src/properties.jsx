@@ -104,6 +104,19 @@ function AutocompleteFields({ node, onChange }) {
   </>;
 }
 
+function TransferFields({ node, onChange }) {
+  const p = node.props;
+  const set = patch => onChange(node.id, { props: patch });
+  const textField = (key, label) => <label className="field" key={key}><span>{label}</span><input key={`${node.id}-${key}-${p[key]}`} defaultValue={p[key]} onBlur={event => { if (event.target.value.trim() && event.target.value.length <= 200) set({ [key]: event.target.value }); else event.target.value = p[key]; }} /></label>;
+  const optionChange = (id, patch) => set({ options: p.options.map(option => option.id === id ? { ...option, ...patch } : option) });
+  return <>{textField('label', 'Transfer label')}{textField('leftLabel', 'Left group label')}{textField('rightLabel', 'Right group label')}
+    <label className="field"><span><input type="checkbox" checked={p.disabled} onChange={event => set({ disabled: event.target.checked })} /> Disabled</span></label>
+    <h3>Options</h3>{p.options.map((option, index) => <div className="structured-row" key={option.id}><strong>Option {index + 1} · {option.id}</strong><label className="field"><span>Option {index + 1} label</span><input key={`${option.id}-label-${option.label}`} defaultValue={option.label} onBlur={event => { if (event.target.value.trim() && event.target.value.length <= 200) optionChange(option.id, { label: event.target.value }); else event.target.value = option.label; }} /></label><label className="field"><span>Option {index + 1} value</span><input key={`${option.id}-value-${option.value}`} defaultValue={option.value} onBlur={event => { const value = event.target.value; if (value.trim() && value.length <= 100 && !p.options.some(other => other.id !== option.id && other.value === value)) optionChange(option.id, { value }); else event.target.value = option.value; }} /></label><label className="field"><span><input type="checkbox" checked={p.defaultRightIds.includes(option.id)} onChange={event => set({ defaultRightIds: event.target.checked ? [...p.defaultRightIds, option.id] : p.defaultRightIds.filter(id => id !== option.id) })} /> Initially on right</span></label><div className="order-actions"><button aria-label={`Move option ${index + 1} up`} disabled={index === 0} onClick={() => set({ options: swap(p.options, index, index - 1) })}>↑</button><button aria-label={`Move option ${index + 1} down`} disabled={index === p.options.length - 1} onClick={() => set({ options: swap(p.options, index, index + 1) })}>↓</button><button aria-label={`Remove option ${index + 1}`} onClick={() => set({ options: p.options.filter(current => current.id !== option.id), defaultRightIds: p.defaultRightIds.filter(id => id !== option.id) })}>Remove</button></div></div>)}
+    <button disabled={p.options.length >= 100} onClick={() => { const id = structuredId('option'); set({ options: [...p.options, { id, label: 'New item', value: id }] }); }}>Add option</button>
+    <p className="property-note">Visitor movement stays local to Preview or the exported page. No remote persistence, search, or form submission is configured.</p>
+  </>;
+}
+
 function ContentTab({ node, location, siblingCount, onChange, onReorder, onRemove, onUploadAsset, assets }) {
   const props = node.props;
   const textLabel = node.type === 'Button' ? 'Button label' : node.type === 'Link' ? 'Link label' : node.type === 'Heading' ? 'Heading text' : 'Text';
@@ -125,6 +138,7 @@ function ContentTab({ node, location, siblingCount, onChange, onReorder, onRemov
     {['Checkbox', 'Radio Group', 'Switch', 'Toggle Button'].includes(node.type) && <ControlFields node={node} onChange={onChange} />}
     {['Rating', 'Slider'].includes(node.type) && <RangeFields node={node} onChange={onChange} />}
     {node.type === 'Autocomplete' && <AutocompleteFields node={node} onChange={onChange} />}
+    {node.type === 'Transfer List' && <TransferFields node={node} onChange={onChange} />}
     {(node.type === 'Button' || node.type === 'Link') && <label className="field"><span>Link destination</span><input value={props.href} placeholder="#section or https://…" onChange={event => onChange(node.id, { props: { href: event.target.value } })} /></label>}
     <p className="property-note">Export: {registry[node.type].exports.join(', ').toUpperCase()}. {registry[node.type].exportNote || 'Static content and styles are supported.'}</p>
     <div className="property-divider" /><h3>Order in parent</h3><div className="order-actions"><button disabled={location.index === 0} onClick={() => onReorder(node.id, location.index - 1)}>↑ Move up</button><button disabled={location.index >= siblingCount - 1} onClick={() => onReorder(node.id, location.index + 1)}>↓ Move down</button></div><button className="remove-node" onClick={() => onRemove(node.id)}>Remove selected node</button>

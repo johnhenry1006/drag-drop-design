@@ -1,5 +1,6 @@
 import { documentCss, iconPaths, regions, registry, supportedStyles, validateDocument } from '@builder/document';
 import { autocompleteCss, autocompleteRuntimeScript, reactAutocompleteComponent, vueAutocompleteComponent } from './autocomplete.js';
+import { transferCss, transferRuntimeScript, reactTransferComponent, vueTransferComponent } from './transfer.js';
 
 export const classFor = id => `n-${id}`;
 export const escapeHtml = value => String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -42,7 +43,7 @@ function checkSupport(document, target) {
 }
 
 export function stylesheet(document, selectorFor = id => `.${classFor(id)}`) {
-  return `*{box-sizing:border-box}html,body,#app{margin:0;min-height:100%}a{text-decoration:none}.region-footer{background:#172b58}\n${componentCss}${contentCss}${formCss}${rangeCss}${autocompleteCss}${documentCss(document, selectorFor)}\n`;
+  return `*{box-sizing:border-box}html,body,#app{margin:0;min-height:100%}a{text-decoration:none}.region-footer{background:#172b58}\n${componentCss}${contentCss}${formCss}${rangeCss}${autocompleteCss}${transferCss}${documentCss(document, selectorFor)}\n`;
 }
 
 function attributes(node, syntax, transformUrl = value => value) {
@@ -68,6 +69,7 @@ function htmlNode(node, transformUrl) {
   if (node.type === 'Toggle Button') { const p = node.props; return `<span class="${classFor(node.id)} builder-toggle" data-pressed="${p.defaultPressed}"${p.disabled ? ' data-disabled="true"' : ''}><button type="button" name="${escapeHtml(p.name)}" aria-pressed="${p.defaultPressed}"${boolAttr('disabled', p.disabled)}>${escapeHtml(p.label)}</button></span>`; }
   if (node.type === 'Rating' || node.type === 'Slider') { const p = node.props; const rating = node.type === 'Rating'; const max = rating ? p.items : p.max; const score = `${p.defaultValue} out of ${p.items}`; return `<div class="${classFor(node.id)} builder-${rating ? 'rating' : 'slider'}"${p.disabled ? ' data-disabled="true"' : ''}${rating && p.readOnly ? ' data-readonly="true"' : ''}><label><span>${escapeHtml(p.label)}</span><input type="range" name="${escapeHtml(p.name)}" min="${rating ? 0 : p.min}" max="${max}" step="${p.step}" value="${p.defaultValue}"${boolAttr('disabled', p.disabled)}${rating ? ` aria-valuetext="${score}"${p.readOnly ? ' aria-readonly="true"' : ''}` : ''}></label>${rating ? `<span class="builder-rating-stars" aria-hidden="true">${Array.from({ length: p.items }, (_, index) => `<span${index < p.defaultValue ? ' data-filled="true"' : ''}>★</span>`).join('')}</span>` : ''}<output aria-live="polite">${rating ? score : p.defaultValue}</output></div>`; }
   if (node.type === 'Autocomplete') { const p = node.props; const listId = `autocomplete-${node.id}-list`; const selected = p.options.find(option => option.id === p.defaultOptionId); return `<div class="${classFor(node.id)} builder-autocomplete" data-empty="${escapeHtml(p.emptyText)}" data-no-results="${escapeHtml(p.noResultsText)}"${p.disabled ? ' data-disabled="true"' : ''}><label for="autocomplete-${node.id}-input">${escapeHtml(p.label)}</label><input id="autocomplete-${node.id}-input" type="text" role="combobox" name="${escapeHtml(p.name)}" placeholder="${escapeHtml(p.placeholder)}" value="${escapeHtml(selected?.label || '')}" data-selected-id="${escapeHtml(p.defaultOptionId)}"${boolAttr('disabled', p.disabled)}${boolAttr('required', p.required)} aria-required="${p.required}" aria-autocomplete="list" aria-expanded="false" aria-controls="${listId}" autocomplete="off"><div id="${listId}" role="listbox" aria-label="${escapeHtml(p.label)} options" class="builder-autocomplete-list" hidden>${p.options.map(option => `<div id="${listId}-${option.id}" role="option" data-option-id="${option.id}" data-search="${escapeHtml(`${option.label} ${option.value}`.toLocaleLowerCase())}" aria-selected="${p.defaultOptionId === option.id}"><span>${escapeHtml(option.label)}</span><small>${escapeHtml(option.value)}</small></div>`).join('')}<div class="builder-autocomplete-empty" role="status" hidden>${escapeHtml(p.options.length ? p.noResultsText : p.emptyText)}</div></div></div>`; }
+  if (node.type === 'Transfer List') { const p = node.props; const group = (side, label) => { const options = p.options.filter(option => p.defaultRightIds.includes(option.id) === (side === 'right')); return `<fieldset class="builder-transfer-group"${boolAttr('disabled', p.disabled)}><legend>${escapeHtml(label)} <span class="builder-transfer-count">(${options.length} items, 0 selected)</span></legend><ul data-side="${side}">${options.map(option => `<li data-option-id="${option.id}"><label><input type="checkbox" aria-label="${escapeHtml(`${option.label} · ${option.value}`)}"${boolAttr('disabled', p.disabled)}><span>${escapeHtml(option.label)}</span><small>${escapeHtml(option.value)}</small></label></li>`).join('')}<li class="builder-transfer-empty"${options.length ? ' hidden' : ''}>No items</li></ul></fieldset>`; }; return `<div class="${classFor(node.id)} builder-transfer" role="group" aria-label="${escapeHtml(p.label)}" data-disabled="${p.disabled}"><div class="builder-transfer-layout">${group('left', p.leftLabel)}<div class="builder-transfer-actions"><button type="button" data-move="right" disabled>Move right →</button><button type="button" data-move="left" disabled>← Move left</button></div>${group('right', p.rightLabel)}</div></div>`; }
   if (node.type === 'Image') return `<img${attrs}>`;
   const content = node.children ? node.children.map(child => htmlNode(child, transformUrl)).join('') : escapeHtml(node.props.text || '');
   return `<${tag}${attrs}>${content}</${tag}>`;
@@ -85,6 +87,7 @@ function jsxNode(node, transformUrl) {
   if (node.type === 'Tooltip') { const p = node.props; return `<TooltipControl id={${JSON.stringify(node.id)}} className={${JSON.stringify(classFor(node.id))}} trigger={${JSON.stringify(p.trigger)}} content={${JSON.stringify(p.content)}} placement={${JSON.stringify(p.placement)}} />`; }
   if (node.type === 'Rating' || node.type === 'Slider') { const p = node.props; const rating = node.type === 'Rating'; return `<${rating ? 'RatingControl' : 'SliderControl'} className={${JSON.stringify(classFor(node.id))}} name={${JSON.stringify(p.name)}} label={${JSON.stringify(p.label)}} initial={${p.defaultValue}} step={${p.step}} disabled={${p.disabled}}${rating ? ` items={${p.items}} readOnly={${p.readOnly}}` : ` min={${p.min}} max={${p.max}}`} />`; }
   if (node.type === 'Autocomplete') { const p = node.props; return `<AutocompleteControl id={${JSON.stringify(node.id)}} className={${JSON.stringify(classFor(node.id))}} name={${JSON.stringify(p.name)}} label={${JSON.stringify(p.label)}} placeholder={${JSON.stringify(p.placeholder)}} options={${JSON.stringify(p.options)}} initial={${JSON.stringify(p.defaultOptionId)}} required={${p.required}} disabled={${p.disabled}} emptyText={${JSON.stringify(p.emptyText)}} noResultsText={${JSON.stringify(p.noResultsText)}} />`; }
+  if (node.type === 'Transfer List') { const p = node.props; return `<TransferControl className={${JSON.stringify(classFor(node.id))}} label={${JSON.stringify(p.label)}} leftLabel={${JSON.stringify(p.leftLabel)}} rightLabel={${JSON.stringify(p.rightLabel)}} options={${JSON.stringify(p.options)}} initial={${JSON.stringify(p.defaultRightIds)}} disabled={${p.disabled}} />`; }
   if (['Checkbox', 'Radio Group', 'Switch', 'Toggle Button'].includes(node.type)) { const p = node.props; const component = { Checkbox: 'CheckboxControl', 'Radio Group': 'RadioControl', Switch: 'SwitchControl', 'Toggle Button': 'ToggleControl' }[node.type]; const initial = node.type === 'Radio Group' ? p.defaultValue : node.type === 'Toggle Button' ? p.defaultPressed : p.defaultChecked; return `<${component} className={${JSON.stringify(classFor(node.id))}} name={${JSON.stringify(p.name)}} label={${JSON.stringify(p.label)}} initial={${JSON.stringify(initial)}} disabled={${p.disabled}}${node.type === 'Radio Group' ? ` options={${JSON.stringify(p.options)}}` : ''}${Object.hasOwn(p, 'required') ? ` required={${p.required}}` : ''} />`; }
   if (node.type === 'Image') return `<img${attrs} />`;
   const content = node.children ? node.children.map(child => jsxNode(child, transformUrl)).join('') : `{${JSON.stringify(node.props.text || '')}}`;
@@ -101,6 +104,7 @@ function vueNode(node, transformUrl = value => value) {
   if (node.type === 'Tooltip') { const p = node.props; return `h(TooltipControl,{id:${JSON.stringify(node.id)},className:${JSON.stringify(classFor(node.id))},trigger:${JSON.stringify(p.trigger)},content:${JSON.stringify(p.content)},placement:${JSON.stringify(p.placement)}})`; }
   if (node.type === 'Rating' || node.type === 'Slider') { const p = node.props; const rating = node.type === 'Rating'; return `h(${rating ? 'RatingControl' : 'SliderControl'},{className:${JSON.stringify(classFor(node.id))},name:${JSON.stringify(p.name)},label:${JSON.stringify(p.label)},initial:${p.defaultValue},step:${p.step},disabled:${p.disabled}${rating ? `,items:${p.items},readOnly:${p.readOnly}` : `,min:${p.min},max:${p.max}`}})`; }
   if (node.type === 'Autocomplete') { const p = node.props; return `h(AutocompleteControl,{id:${JSON.stringify(node.id)},className:${JSON.stringify(classFor(node.id))},name:${JSON.stringify(p.name)},label:${JSON.stringify(p.label)},placeholder:${JSON.stringify(p.placeholder)},options:${JSON.stringify(p.options)},initial:${JSON.stringify(p.defaultOptionId)},required:${p.required},disabled:${p.disabled},emptyText:${JSON.stringify(p.emptyText)},noResultsText:${JSON.stringify(p.noResultsText)}})`; }
+  if (node.type === 'Transfer List') { const p = node.props; return `h(TransferControl,{className:${JSON.stringify(classFor(node.id))},label:${JSON.stringify(p.label)},leftLabel:${JSON.stringify(p.leftLabel)},rightLabel:${JSON.stringify(p.rightLabel)},options:${JSON.stringify(p.options)},initial:${JSON.stringify(p.defaultRightIds)},disabled:${p.disabled}})`; }
   if (['Checkbox', 'Radio Group', 'Switch', 'Toggle Button'].includes(node.type)) { const p = node.props; const component = { Checkbox: 'CheckboxControl', 'Radio Group': 'RadioControl', Switch: 'SwitchControl', 'Toggle Button': 'ToggleControl' }[node.type]; const initial = node.type === 'Radio Group' ? p.defaultValue : node.type === 'Toggle Button' ? p.defaultPressed : p.defaultChecked; return `h(${component},{className:${JSON.stringify(classFor(node.id))},name:${JSON.stringify(p.name)},label:${JSON.stringify(p.label)},initial:${JSON.stringify(initial)},disabled:${p.disabled}${node.type === 'Radio Group' ? `,options:${JSON.stringify(p.options)}` : ''}${Object.hasOwn(p, 'required') ? `,required:${p.required}` : ''}})`; }
   const props = { class: classFor(node.id) };
   if (node.type === 'Image') { props.src = transformUrl(node.props.src, node, 'src'); props.alt = node.props.alt; }
@@ -128,11 +132,12 @@ export function packageFile(name, dependencies) {
 export function exportHtml(document) {
   checkSupport(document, 'html');
   return {
-    'index.html': `<!doctype html>\n<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(document.props.title)}</title><link rel="stylesheet" href="./styles.css"><script src="./avatar.js" defer></script><script src="./tooltip.js" defer></script><script src="./controls.js" defer></script><script src="./autocomplete.js" defer></script></head><body><div class="${classFor(document.id)}">${htmlRegions(document)}</div></body></html>\n`,
+    'index.html': `<!doctype html>\n<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(document.props.title)}</title><link rel="stylesheet" href="./styles.css"><script src="./avatar.js" defer></script><script src="./tooltip.js" defer></script><script src="./controls.js" defer></script><script src="./autocomplete.js" defer></script><script src="./transfer.js" defer></script></head><body><div class="${classFor(document.id)}">${htmlRegions(document)}</div></body></html>\n`,
     'avatar.js': avatarFallbackScript,
     'tooltip.js': tooltipRuntimeScript,
     'controls.js': controlRuntimeScript + rangeRuntimeScript,
     'autocomplete.js': autocompleteRuntimeScript,
+    'transfer.js': transferRuntimeScript,
     'styles.css': stylesheet(document)
   };
 }
@@ -143,10 +148,11 @@ export function exportReact(document) {
     'package.json': packageFile('builder-react-export', { react: '^19.2.0', 'react-dom': '^19.2.0', vite: '^6.3.0' }),
     'index.html': `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(document.props.title)}</title></head><body><div id="app"></div><script type="module" src="/src/main.jsx"></script></body></html>\n`,
     'src/main.jsx': `import React from 'react';\nimport { createRoot } from 'react-dom/client';\nimport App from './App.jsx';\nimport './styles.css';\ncreateRoot(document.getElementById('app')).render(<App />);\n`,
-    'src/App.jsx': `import React from 'react';\nimport TooltipControl from './tooltip.jsx';\nimport AutocompleteControl from './autocomplete.jsx';\nimport {CheckboxControl,RadioControl,SwitchControl,ToggleControl,RatingControl,SliderControl} from './controls.jsx';\nexport default function App(){return <div className="${classFor(document.id)}">${jsxRegions(document)}</div>;}\n`,
+    'src/App.jsx': `import React from 'react';\nimport TooltipControl from './tooltip.jsx';\nimport AutocompleteControl from './autocomplete.jsx';\nimport TransferControl from './transfer.jsx';\nimport {CheckboxControl,RadioControl,SwitchControl,ToggleControl,RatingControl,SliderControl} from './controls.jsx';\nexport default function App(){return <div className="${classFor(document.id)}">${jsxRegions(document)}</div>;}\n`,
     'src/tooltip.jsx': reactTooltipComponent,
     'src/controls.jsx': reactControlComponents + reactRangeComponents,
     'src/autocomplete.jsx': reactAutocompleteComponent,
+    'src/transfer.jsx': reactTransferComponent,
     'src/styles.css': stylesheet(document)
   };
 }
@@ -156,10 +162,11 @@ export function exportVue(document) {
   return {
     'package.json': packageFile('builder-vue-export', { vue: '^3.5.0', vite: '^6.3.0' }),
     'index.html': `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(document.props.title)}</title></head><body><div id="app"></div><script type="module" src="/src/main.js"></script></body></html>\n`,
-    'src/main.js': `import { createApp, h } from 'vue';\nimport TooltipControl from './tooltip.js';\nimport AutocompleteControl from './autocomplete.js';\nimport {CheckboxControl,RadioControl,SwitchControl,ToggleControl,RatingControl,SliderControl} from './controls.js';\nimport './styles.css';\nconst App = { render(){ return h('div',{class:'${classFor(document.id)}'},[${vueRegions(document)}]); } };\ncreateApp(App).mount('#app');\n`,
+    'src/main.js': `import { createApp, h } from 'vue';\nimport TooltipControl from './tooltip.js';\nimport AutocompleteControl from './autocomplete.js';\nimport TransferControl from './transfer.js';\nimport {CheckboxControl,RadioControl,SwitchControl,ToggleControl,RatingControl,SliderControl} from './controls.js';\nimport './styles.css';\nconst App = { render(){ return h('div',{class:'${classFor(document.id)}'},[${vueRegions(document)}]); } };\ncreateApp(App).mount('#app');\n`,
     'src/tooltip.js': vueTooltipComponent,
     'src/controls.js': vueControlComponents + vueRangeComponents,
     'src/autocomplete.js': vueAutocompleteComponent,
+    'src/transfer.js': vueTransferComponent,
     'src/styles.css': stylesheet(document)
   };
 }

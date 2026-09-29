@@ -26,7 +26,8 @@ export const paletteItems = [
   { key: 'Toggle Button', label: 'Toggle Button', group: 'Forms', icon: '▣' },
   { key: 'Rating', label: 'Rating', group: 'Forms', icon: '★' },
   { key: 'Slider', label: 'Slider', group: 'Forms', icon: '━' },
-  { key: 'Autocomplete', label: 'Autocomplete', group: 'Forms', icon: '⌕' }
+  { key: 'Autocomplete', label: 'Autocomplete', group: 'Forms', icon: '⌕' },
+  { key: 'Transfer List', label: 'Transfer List', group: 'Forms', icon: '⇄' }
 ];
 
 const styles = desktop => ({ desktop, tablet: {}, mobile: {} });
@@ -71,5 +72,6 @@ export function createPaletteNode(key) {
     }
     return node;
   }
+  if (key === 'Transfer List') return basic(key, { options: registry[key].defaults.options.map(option => ({ ...option, id: id() })) });
   return basic(key);
 }
