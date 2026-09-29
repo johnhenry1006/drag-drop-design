@@ -6,3 +6,4 @@ export { addNode, removeNode, updateNode, moveNode, reorderNode, findNode, getAn
 export { parseAdvancedCss } from './advanced-css.js';
 export { supportedStyles } from './style-support.js';
 export { normalizePagePath } from './paths.js';
+export { iconPaths, iconIds } from './icons.js';

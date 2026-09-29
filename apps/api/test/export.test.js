@@ -25,6 +25,10 @@ test('ZIP exports include saved paths, responsive CSS, bundled assets, and exact
     home = addNode(home, 'header', 0, { id: 'uploaded_logo', type: 'Image', props: { src: asset.url, alt: 'Uploaded logo' }, styles: { desktop: { width: '80px' }, tablet: {}, mobile: { width: '48px' } } });
     home = addNode(home, 'main', 0, { id: 'uploaded_logo_main', type: 'Image', props: { src: asset.url, alt: 'Uploaded logo in main' }, styles: { desktop: {}, tablet: {}, mobile: {} } });
     home = addNode(home, 'footer', 0, { id: 'uploaded_logo_footer', type: 'Image', props: { src: asset.url, alt: 'Uploaded logo in footer' }, styles: { desktop: {}, tablet: {}, mobile: {} } });
+    home = addNode(home, 'header', 0, { id: 'uploaded_avatar', type: 'Avatar', props: { src: asset.url, alt: 'Portrait', name: 'Ada Lovelace', initials: 'AL', shape: 'circle', size: 48 }, styles: { desktop: {}, tablet: {}, mobile: { width: '36px' } } });
+    home = addNode(home, 'main', 0, { id: 'inbox_badge', type: 'Badge', props: { content: 'Inbox', text: '', count: 101, maxCount: 99, color: '#d4344a', placement: 'topRight' }, styles: { desktop: {}, tablet: {}, mobile: {} } });
+    home = addNode(home, 'footer', 0, { id: 'featured_chip', type: 'Chip', props: { label: 'Featured', icon: 'star' }, styles: { desktop: {}, tablet: {}, mobile: {} } });
+    home = addNode(home, 'hero_inner', 0, { id: 'decorative_icon', type: 'Icons', props: { icon: 'heart', name: 'Heart', size: 24, color: '#334155' }, styles: { desktop: {}, tablet: {}, mobile: {} } });
     let about = structuredClone(samplePage);
     about.props.title = 'About & Contact';
     about = updateNode(about, 'nav_work', { props: { href: '/' } });
@@ -57,6 +61,7 @@ test('ZIP exports include saved paths, responsive CSS, bundled assets, and exact
       assert.equal(Object.keys(files).filter(name => name.endsWith(`/assets/${asset.id}.png`) || name === `assets/${asset.id}.png`).length, 1);
       assert.equal(Object.keys(files).some(name => name.includes(unused.id)), false);
       assert.equal(Object.entries(files).filter(([name]) => name.endsWith('.html') || name === 'src/pages.jsx' || name === 'src/pages.js').some(([, bytes]) => /\/api\/assets\/|localhost|s3-ninja/.test(strFromU8(bytes))), false);
+      assert.match(strFromU8(files[target === 'html' ? 'index.html' : target === 'react' ? 'src/pages.jsx' : 'src/pages.js']), /builder-avatar/);
       const css = strFromU8(files[target === 'html' ? 'styles.css' : 'src/styles.css']);
       assert.match(css, /@media \(max-width: 900px\)/);
       assert.match(css, /@media \(max-width: 600px\)/);

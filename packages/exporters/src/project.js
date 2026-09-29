@@ -1,6 +1,6 @@
 import { posix } from 'node:path';
 import { documentCss, normalizePagePath, regions, registry, supportedStyles, validateDocument } from '@builder/document';
-import { classFor, escapeHtml, htmlRegions, jsxRegions, packageFile, vueRegions } from './index.js';
+import { avatarFallbackScript, classFor, componentCss, escapeHtml, htmlRegions, jsxRegions, packageFile, vueRegions } from './index.js';
 
 const targets = new Set(['html', 'react', 'vue']);
 const mediaExtensions = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
@@ -19,7 +19,7 @@ function walk(document, visit) {
 export function referencedAssetIds(pages) {
   const ids = new Set();
   for (const page of pages) walk(page.document, node => {
-    if (node.type !== 'Image') return;
+    if (node.type !== 'Image' && node.type !== 'Avatar') return;
     const match = assetPattern.exec(node.props.src);
     if (match) ids.add(match[1]);
   });
@@ -60,8 +60,9 @@ export function analyzeProjectExport(target, pages, assets = []) {
       for (const [breakpoint, styles] of Object.entries(node.styles)) {
         for (const property of Object.keys(styles)) if (!supportedStyles.has(property)) issues.push(issue(page, node, `${breakpoint}.${property}`, `${target} cannot export ${property}`));
       }
-      if (node.type === 'Image') {
+      if (node.type === 'Image' || node.type === 'Avatar') {
         const src = node.props.src;
+        if (node.type === 'Avatar' && !src) return;
         const match = assetPattern.exec(src);
         if (match) {
           const asset = assetsById.get(match[1]);
@@ -114,7 +115,7 @@ function urlMapper(target, page, assetsById) {
 }
 
 const baseCss = '*{box-sizing:border-box}html,body,#app{margin:0;min-height:100%}a{text-decoration:none}.region-footer{background:#172b58}.page-region{min-height:75px}\n';
-const projectCss = pages => baseCss + pages.map(page => {
+const projectCss = pages => baseCss + componentCss + pages.map(page => {
   const scope = `.${pageClass(page)}`;
   return `${scope}{background:#fff;max-width:1440px;margin:0 auto}${documentCss(page.document, id => id === page.document.id ? scope : `${scope} .${classFor(id)}`)}`;
 }).join('\n');
@@ -124,7 +125,7 @@ const readme = (target, pages) => `# Exported ${target.toUpperCase()} project\n\
 function htmlScripts() {
   return {
     'package.json': JSON.stringify({ name: 'builder-html-export', private: true, version: '1.0.0', type: 'module', scripts: { dev: 'node server.js', build: 'node build.js', preview: 'node server.js dist' } }, null, 2) + '\n',
-    'build.js': `import { cp, mkdir, readdir } from 'node:fs/promises';\nawait mkdir('dist', { recursive: true });\nfor (const entry of await readdir('.', { withFileTypes: true })) {\n  if (entry.name === 'dist' || entry.name === 'node_modules') continue;\n  if (entry.name === 'assets' || entry.name === 'styles.css' || entry.name === 'index.html' || entry.isDirectory()) await cp(entry.name, 'dist/' + entry.name, { recursive: true });\n}\nconsole.log('Built HTML project in dist/');\n`,
+    'build.js': `import { cp, mkdir, readdir } from 'node:fs/promises';\nawait mkdir('dist', { recursive: true });\nfor (const entry of await readdir('.', { withFileTypes: true })) {\n  if (entry.name === 'dist' || entry.name === 'node_modules') continue;\n  if (entry.name === 'assets' || entry.name === 'styles.css' || entry.name === 'avatar.js' || entry.name === 'index.html' || entry.isDirectory()) await cp(entry.name, 'dist/' + entry.name, { recursive: true });\n}\nconsole.log('Built HTML project in dist/');\n`,
     'server.js': `import { createServer } from 'node:http';\nimport { readFile, stat } from 'node:fs/promises';\nimport { resolve, sep } from 'node:path';\nconst root = resolve(process.argv[2] || '.');\nconst types = { '.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8', '.png':'image/png', '.jpg':'image/jpeg', '.gif':'image/gif', '.webp':'image/webp' };\ncreateServer(async (request, response) => {\n  try {\n    const pathname = decodeURIComponent(new URL(request.url, 'http://localhost').pathname);\n    const path = resolve(root, '.' + pathname);\n    if (path !== root && !path.startsWith(root + sep)) throw new Error('Forbidden');\n    const info = await stat(path).catch(() => null);\n    const file = info?.isDirectory() ? resolve(path, 'index.html') : info ? path : resolve(path, 'index.html');\n    const data = await readFile(file);\n    const extension = file.slice(file.lastIndexOf('.'));\n    response.writeHead(200, { 'Content-Type': types[extension] || 'application/octet-stream' }); response.end(data);\n  } catch { response.writeHead(404); response.end('Not found'); }\n}).listen(4173, '127.0.0.1', () => console.log('http://127.0.0.1:4173'));\n`
   };
 }
@@ -136,13 +137,14 @@ export function buildProjectFiles(target, pages, assets = []) {
   const assetsById = new Map(assets.map(asset => [asset.id, asset]));
   if (target === 'html') {
     Object.assign(files, htmlScripts());
+    files['avatar.js'] = avatarFallbackScript;
     files['README.md'] = readme(target, pages);
     files['styles.css'] = projectCss(pages);
     for (const page of pages) {
       const scope = pageClass(page);
       const cssHref = relativeUrl(page.path, 'styles.css');
       const markup = htmlRegions(page.document, urlMapper(target, page, assetsById));
-      files[pageFile(page.path)] = `<!doctype html>\n<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(page.document.props.title)}</title><link rel="stylesheet" href="${escapeHtml(cssHref)}"></head><body><div class="${scope}">${markup}</div></body></html>\n`;
+      files[pageFile(page.path)] = `<!doctype html>\n<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(page.document.props.title)}</title><link rel="stylesheet" href="${escapeHtml(cssHref)}"><script src="${escapeHtml(relativeUrl(page.path, 'avatar.js'))}" defer></script></head><body><div class="${scope}">${markup}</div></body></html>\n`;
     }
     if (!pages.some(page => page.path === '/')) files['index.html'] = `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Pages</title></head><body><main><h1>Pages</h1><ul>${pages.map(page => `<li><a href=".${escapeHtml(page.path)}/">${escapeHtml(page.name)}</a></li>`).join('')}</ul></main></body></html>\n`;
   } else if (target === 'react') {

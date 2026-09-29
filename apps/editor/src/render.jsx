@@ -1,5 +1,5 @@
 import React from 'react';
-import { documentCss, regions, registry } from '@builder/document';
+import { documentCss, iconPaths, regions, registry } from '@builder/document';
 import { useDroppable } from '@dnd-kit/react';
 import { pointerIntersection } from '@dnd-kit/collision';
 
@@ -9,7 +9,11 @@ const renderers = {
   heading: (node, content, common) => React.createElement(`h${node.props.level || 2}`, common, node.props.text),
   text: (node, content, common) => React.createElement('p', common, node.props.text),
   image: (node, content, common) => React.createElement('img', { ...common, src: node.props.src, alt: node.props.alt }),
-  button: (node, content, common) => React.createElement('a', { ...common, href: node.props.href }, node.props.text)
+  button: (node, content, common) => React.createElement('a', { ...common, href: node.props.href }, node.props.text),
+  avatar: (node, content, common) => <span {...common} className="builder-avatar" data-shape={node.props.shape} role="img" aria-label={node.props.alt || node.props.name} style={{ '--avatar-size': `${node.props.size}px` }}><span aria-hidden="true">{node.props.initials || node.props.name?.split(/\s+/).map(word => word[0]).slice(0, 2).join('').toUpperCase()}</span>{node.props.src && <img key={node.props.src} src={node.props.src} alt="" aria-hidden="true" onError={event => { event.currentTarget.hidden = true; }} />}</span>,
+  badge: (node, content, common) => <span {...common} className="builder-badge" data-placement={node.props.placement} style={{ '--badge-color': node.props.color }}><span>{node.props.content}</span><span className="builder-badge-mark" aria-label={node.props.text || (node.props.maxCount > 0 && node.props.count > node.props.maxCount ? `${node.props.maxCount} plus` : String(node.props.count))}>{node.props.text || (node.props.maxCount > 0 && node.props.count > node.props.maxCount ? `${node.props.maxCount}+` : node.props.count)}</span></span>,
+  chip: (node, content, common) => <span {...common} className="builder-chip">{node.props.icon && <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d={iconPaths[node.props.icon]} /></svg>}<span>{node.props.label}</span></span>,
+  icon: (node, content, common) => <svg {...common} className="builder-icon" viewBox="0 0 24 24" role="img" aria-label={node.props.name} style={{ '--icon-size': `${node.props.size}px`, '--icon-color': node.props.color }}><path d={iconPaths[node.props.icon]} /></svg>
 };
 
 function NodeView({ node, selectedId, onSelect, dropTarget, depth }) {

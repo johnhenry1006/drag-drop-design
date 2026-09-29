@@ -10,9 +10,13 @@ export const paletteItems = [
   { key: 'Layout', label: 'Layout', group: 'Layout', icon: '▥' },
   { key: 'Columns3', label: '3-column layout', group: 'Layout', icon: '▥' },
   { key: 'Image', label: 'Image', group: 'Media', icon: '▧' },
+  { key: 'Avatar', label: 'Avatar', group: 'Media', icon: '◉' },
+  { key: 'Icons', label: 'Icons', group: 'Media', icon: '★' },
   { key: 'Navigation', label: 'Navigation', group: 'Navigation', icon: '☷' },
   { key: 'Link', label: 'Link', group: 'Navigation', icon: '↗' },
-  { key: 'Card', label: 'Card', group: 'Content', icon: '▢' }
+  { key: 'Card', label: 'Card', group: 'Content', icon: '▢' },
+  { key: 'Badge', label: 'Badge', group: 'Content', icon: '●' },
+  { key: 'Chip', label: 'Chip', group: 'Content', icon: '◖' }
 ];
 
 const styles = desktop => ({ desktop, tablet: {}, mobile: {} });

@@ -1,9 +1,37 @@
 import { breakpoints, regions, registry } from './registry.js';
 import { supportedStyles } from './style-support.js';
 import { parseAdvancedCss } from './advanced-css.js';
+import { iconIds } from './icons.js';
 
 const plain = value => value !== null && typeof value === 'object' && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 const identifier = value => typeof value === 'string' && /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(value);
+const newTypes = new Set(['Avatar', 'Badge', 'Chip', 'Icons']);
+const stringField = (value, max = 200) => typeof value === 'string' && value.length <= max;
+const integerField = (value, min, max) => Number.isInteger(value) && value >= min && value <= max;
+const colorField = value => typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value);
+
+function validNewProp(type, key, value) {
+  if (type === 'Avatar') {
+    if (key === 'size') return integerField(value, 16, 256);
+    if (key === 'shape') return ['circle', 'square', 'rounded'].includes(value);
+    if (key === 'src') return stringField(value, 2048) && (!value || /^(\/|https?:\/\/|data:image\/)/i.test(value));
+    return stringField(value, key === 'alt' ? 500 : 100);
+  }
+  if (type === 'Badge') {
+    if (key === 'count' || key === 'maxCount') return integerField(value, 0, 99999);
+    if (key === 'color') return colorField(value);
+    if (key === 'placement') return ['topLeft', 'topRight', 'bottomLeft', 'bottomRight'].includes(value);
+    return stringField(value, 200);
+  }
+  if (type === 'Chip') return key === 'icon' ? value === '' || iconIds.includes(value) : stringField(value, 200);
+  if (type === 'Icons') {
+    if (key === 'icon') return iconIds.includes(value);
+    if (key === 'size') return integerField(value, 12, 256);
+    if (key === 'color') return colorField(value);
+    return stringField(value, 100);
+  }
+  return false;
+}
 
 function assertJson(value, path, seen) {
   if (value === null || typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) return;
@@ -52,11 +80,19 @@ function validateNode(node, path, ids) {
   if (!plain(node.props)) throw new Error(`${path}.props must be an object`);
   const unsupportedProp = Object.keys(node.props).find(key => !registry[node.type].editable.includes(key));
   if (unsupportedProp) throw new Error(`${path}.props has unsupported property ${unsupportedProp}`);
+  if (newTypes.has(node.type)) {
+    const missingProp = registry[node.type].editable.find(key => !Object.hasOwn(node.props, key));
+    if (missingProp) throw new Error(`${path}.props.${missingProp} is required`);
+  }
   for (const [key, value] of Object.entries(node.props)) {
-    if (key === 'level' ? !Number.isInteger(value) || value < 1 || value > 6 : typeof value !== 'string') throw new Error(`${path}.props.${key} is invalid`);
+    if (newTypes.has(node.type) ? !validNewProp(node.type, key, value) : key === 'level' ? !Number.isInteger(value) || value < 1 || value > 6 : typeof value !== 'string') throw new Error(`${path}.props.${key} is invalid`);
     if (key === 'href' && value && !/^(#|\/|https?:\/\/|mailto:|tel:)/i.test(value)) throw new Error(`${path}.props.href has an unsupported URL`);
     if (key === 'src' && value && !/^(\/|https?:\/\/|data:image\/)/i.test(value)) throw new Error(`${path}.props.src has an unsupported URL`);
   }
+  if (node.type === 'Avatar' && !node.props.name?.trim() && !node.props.alt?.trim()) throw new Error(`${path}.props needs an accessible name`);
+  if (node.type === 'Icons' && !node.props.name?.trim()) throw new Error(`${path}.props.name needs an accessible name`);
+  if (node.type === 'Badge' && !node.props.content?.trim()) throw new Error(`${path}.props.content needs anchor text`);
+  if (node.type === 'Chip' && !node.props.label?.trim()) throw new Error(`${path}.props.label is required`);
   validateStyles(node.styles, path);
   validateAdvancedCss(node.advancedCss, path);
   if (registry[node.type].kind === 'container') {
