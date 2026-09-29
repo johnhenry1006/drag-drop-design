@@ -155,3 +155,9 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .error { color: #a22; }
 @media (max-width: 1100px) { .workspace { grid-template-columns: 220px minmax(0,1fr) 270px; } .canvas-scroll { padding: 14px; } .status-text { display: none; } }
 @media (max-width: 760px) { .workspace { grid-template-columns: 220px minmax(0,1fr); } .properties { position: absolute; right: 0; top: 94px; width: 250px; height: calc(100vh - 94px); box-shadow: -5px 0 20px #bbc6dc55; } .canvas-hint, .project-name, .divider, .toolbar-button { display: none; } }
+
+.palette-search { display: block; padding: 12px 18px 4px; color: #61718d; font-size: 11px; font-weight: 700; }
+.palette-search span { display: block; margin-bottom: 6px; }
+.palette-search input { width: 100%; padding: 9px; border: 1px solid #dce3ee; border-radius: 7px; }
+.palette-support, .palette-no-results { margin: 3px 8px 10px; color: #8190a8; font-size: 10px; line-height: 1.45; }
+.page [data-node-id]:focus-visible { outline: 3px solid #2149bd; outline-offset: 3px; }

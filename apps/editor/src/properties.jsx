@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { findNode, getAncestors, parseAdvancedCss } from '@builder/document';
+import { findNode, getAncestors, parseAdvancedCss, registry } from '@builder/document';
 
 const labelFor = node => node.props.label || node.props.text || node.type;
 const boxSides = ['Top', 'Right', 'Bottom', 'Left'];
@@ -36,6 +36,7 @@ function ContentTab({ node, location, siblingCount, onChange, onReorder, onRemov
     {node.type === 'Heading' && <label className="field"><span>Heading level</span><select value={props.level} onChange={event => onChange(node.id, { props: { level: Number(event.target.value) } })}>{[1, 2, 3, 4, 5, 6].map(level => <option key={level} value={level}>H{level}</option>)}</select></label>}
     {node.type === 'Image' && <><label className="field"><span>Image source</span><input value={props.src} placeholder="/api/assets/… or https://…" onChange={event => onChange(node.id, { props: { src: event.target.value } })} /></label><label className="field"><span>Upload image</span><input type="file" accept="image/png,image/jpeg,image/gif,image/webp" onChange={event => { const file = event.target.files?.[0]; if (file) onUploadAsset(node.id, file); event.target.value = ''; }} /></label>{assets.length > 0 && <label className="field"><span>Saved assets</span><select value={assets.some(asset => asset.url === props.src) ? props.src : ''} onChange={event => { if (event.target.value) onChange(node.id, { props: { src: event.target.value } }); }}><option value="">Choose an image</option>{assets.map(asset => <option key={asset.id} value={asset.url}>{asset.filename}</option>)}</select></label>}<label className="field"><span>Alternative text</span><input value={props.alt} onChange={event => onChange(node.id, { props: { alt: event.target.value } })} /></label></>}
     {(node.type === 'Button' || node.type === 'Link') && <label className="field"><span>Link destination</span><input value={props.href} placeholder="#section or https://…" onChange={event => onChange(node.id, { props: { href: event.target.value } })} /></label>}
+    <p className="property-note">Export: {registry[node.type].exports.join(', ').toUpperCase()}. {registry[node.type].exportNote || 'Static content and styles are supported.'}</p>
     <div className="property-divider" /><h3>Order in parent</h3><div className="order-actions"><button disabled={location.index === 0} onClick={() => onReorder(node.id, location.index - 1)}>↑ Move up</button><button disabled={location.index >= siblingCount - 1} onClick={() => onReorder(node.id, location.index + 1)}>↓ Move down</button></div><button className="remove-node" onClick={() => onRemove(node.id)}>Remove selected node</button>
   </div>;
 }

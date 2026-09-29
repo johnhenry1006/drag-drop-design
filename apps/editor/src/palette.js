@@ -1,16 +1,18 @@
 import { registry } from '@builder/document';
 
+export const paletteGroups = ['Basic', 'Layout', 'Media', 'Navigation', 'Content', 'Forms', 'Custom'];
 export const paletteItems = [
-  { key: 'Heading', label: 'Heading', group: 'Elements', icon: 'H' },
-  { key: 'Text', label: 'Text', group: 'Elements', icon: '¶' },
-  { key: 'Image', label: 'Image', group: 'Elements', icon: '▧' },
-  { key: 'Button', label: 'Button', group: 'Elements', icon: '▣' },
-  { key: 'Link', label: 'Link', group: 'Elements', icon: '↗' },
-  { key: 'Navigation', label: 'Navigation', group: 'Structure', icon: '☷' },
-  { key: 'Container', label: 'Container', group: 'Structure', icon: '□' },
-  { key: 'Section', label: 'Section', group: 'Structure', icon: '▤' },
-  { key: 'Layout', label: 'Layout', group: 'Structure', icon: '▥' },
-  { key: 'Columns3', label: '3-column layout', group: 'Presets', icon: '▥' }
+  { key: 'Heading', label: 'Heading', group: 'Basic', icon: 'H' },
+  { key: 'Text', label: 'Text', group: 'Basic', icon: '¶' },
+  { key: 'Button', label: 'Button', group: 'Basic', icon: '▣' },
+  { key: 'Container', label: 'Container', group: 'Layout', icon: '□' },
+  { key: 'Section', label: 'Section', group: 'Layout', icon: '▤' },
+  { key: 'Layout', label: 'Layout', group: 'Layout', icon: '▥' },
+  { key: 'Columns3', label: '3-column layout', group: 'Layout', icon: '▥' },
+  { key: 'Image', label: 'Image', group: 'Media', icon: '▧' },
+  { key: 'Navigation', label: 'Navigation', group: 'Navigation', icon: '☷' },
+  { key: 'Link', label: 'Link', group: 'Navigation', icon: '↗' },
+  { key: 'Card', label: 'Card', group: 'Content', icon: '▢' }
 ];
 
 const styles = desktop => ({ desktop, tablet: {}, mobile: {} });
@@ -33,6 +35,7 @@ export function createPaletteNode(key) {
   }
   if (!registry[key]) throw new Error(`Unknown palette item ${key}`);
   if (key === 'Navigation') return basic(key, {}, { display: 'flex', gap: '20px', alignItems: 'center', minHeight: '48px', padding: '8px' });
+  if (key === 'Card') return basic(key, {}, { padding: '20px', borderRadius: '12px', border: '1px solid #dce3ee' });
   if (key === 'Container') return basic(key, {}, { minHeight: '80px', padding: '16px' });
   if (key === 'Section') return basic(key, {}, { minHeight: '100px', padding: '24px' });
   if (key === 'Layout') return basic(key, {}, { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', padding: '16px' });

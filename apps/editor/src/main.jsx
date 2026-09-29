@@ -4,7 +4,8 @@ import { DragDropProvider, useDraggable, useDroppable } from '@dnd-kit/react';
 import { pointerIntersection } from '@dnd-kit/collision';
 import { addNode, findNode, getAncestors, normalizePagePath, regions, registry, removeNode, reorderNode, samplePage, updateNode, validateDocument } from '@builder/document';
 import { applyDrop, placementFromPointer } from './drop.js';
-import { createPaletteNode, paletteItems } from './palette.js';
+import { createPaletteNode, paletteGroups, paletteItems } from './palette.js';
+import { emptyHistory, recordChange, travel } from './history.js';
 import { PageView } from './render.jsx';
 import { PropertiesPanel } from './properties.jsx';
 import { insertSuggestion, layoutSuggestions } from './suggestions.js';
@@ -21,8 +22,12 @@ function PaletteButton({ item, onAdd }) {
 }
 
 function ElementsPanel({ onAdd, suggestionRegion, onSuggest, onInsertSuggestion }) {
+  const [query, setQuery] = useState('');
+  const matches = paletteItems.filter(item => `${item.label} ${item.group}`.toLowerCase().includes(query.trim().toLowerCase()));
   return <div className="panel-scroll"><div className="panel-heading"><span className="panel-kicker">BUILD</span><h2>Elements</h2><p>Drag onto the canvas or select a target and click to add.</p></div>
-    {['Elements', 'Structure', 'Presets'].map(group => <section className="palette-group" key={group}><h3>{group}</h3>{paletteItems.filter(item => item.group === group).map(item => <PaletteButton key={item.key} item={item} onAdd={onAdd} />)}</section>)}
+    <label className="palette-search"><span>Search elements</span><input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search elements…" /></label>
+    {paletteGroups.map(group => { const items = matches.filter(item => item.group === group); return <section className="palette-group" key={group}><h3>{group}</h3>{items.map(item => <div key={item.key}><PaletteButton item={item} onAdd={onAdd} />{registry[item.key]?.exportNote && <p className="palette-support">HTML5, React, Vue · {registry[item.key].exportNote}</p>}</div>)}{!items.length && !query && <p className="palette-support">{group === 'Forms' ? 'Form controls and submission are not supported yet.' : group === 'Custom' ? 'Custom code and components are not supported yet.' : 'No elements yet.'}</p>}</section>; })}
+    {query && matches.length === 0 && <p className="palette-no-results">No matching elements.</p>}
     <section className="suggestion-panel" aria-label="Layout suggestions"><h3>Layout suggestions</h3><p>Optional starting points. Every inserted node stays editable.</p><div className="suggestion-regions">{regions.map(region => <button key={region} className={suggestionRegion === region ? 'active' : ''} onClick={() => onSuggest(region)}>{region}</button>)}</div>
       {layoutSuggestions.filter(item => item.region === suggestionRegion).map(item => <button className="suggestion-item" key={item.key} onClick={() => onInsertSuggestion(item.key, suggestionRegion)}><strong>{item.label}</strong><span>{item.description}</span></button>)}
     </section>
@@ -100,7 +105,7 @@ function Editor({ document, setDocument, selectedId, setSelectedId, selectedRegi
     return () => window.removeEventListener('pointermove', track, true);
   }, []);
   const select = id => { setSelectedId(id); setSelectedRegion(null); };
-  const selectRegion = region => { setSelectedId(null); setSelectedRegion(region); };
+  const selectRegion = region => { setSelectedId(null); setSelectedRegion(region); setSuggestionRegion(region); };
   const toggle = id => setExpanded(previous => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   const expandAncestors = (page, id) => setExpanded(previous => new Set([...previous, ...getAncestors(page, id)]));
   const change = (id, patch) => {
@@ -177,6 +182,24 @@ function Editor({ document, setDocument, selectedId, setSelectedId, selectedRegi
 
 function App() {
   const [document, setDocument] = useState(null);
+  const documentRef = useRef(null);
+  const historyRef = useRef(emptyHistory());
+  const [history, setHistory] = useState(historyRef.current);
+  const replaceDocument = next => { documentRef.current = next; setDocument(next); historyRef.current = emptyHistory(); setHistory(historyRef.current); };
+  const commitDocument = value => {
+    const current = documentRef.current;
+    const next = typeof value === 'function' ? value(current) : value;
+    if (!current || JSON.stringify(current) === JSON.stringify(next)) return;
+    historyRef.current = recordChange(historyRef.current, current, next);
+    setHistory(historyRef.current); documentRef.current = next; setDocument(next);
+  };
+  const navigateHistory = direction => {
+    const step = travel(historyRef.current, documentRef.current, direction);
+    if (!step) return;
+    historyRef.current = step.history; setHistory(step.history); documentRef.current = step.document; setDocument(step.document);
+    setSelectedId(id => id && findNode(step.document, id) ? id : null);
+    setStatus({ message: direction === 'undo' ? 'Undid change' : 'Redid change', tone: 'info' });
+  };
   const [savedDocument, setSavedDocument] = useState(null);
   const [projects, setProjects] = useState([]);
   const [pages, setPages] = useState([]);
@@ -204,7 +227,7 @@ function App() {
 
   const activatePage = page => {
     const next = validateDocument(page.document);
-    setDocument(next); setSavedDocument(next); setCurrentPage(page);
+    replaceDocument(next); setSavedDocument(next); setCurrentPage(page);
     setConflict(false);
     window.localStorage.setItem('builder:lastProjectId', page.projectId);
     window.localStorage.setItem('builder:lastPageId', page.id);
@@ -220,7 +243,7 @@ function App() {
       activatePage((await api(`/pages/${preferred.id}`)).page);
     }
     else {
-      setDocument(null); setSavedDocument(null); setCurrentPage(null);
+      replaceDocument(null); setSavedDocument(null); setCurrentPage(null);
       setStatus({ message: 'Create a page to start editing', tone: 'info' });
     }
   };
@@ -244,6 +267,20 @@ function App() {
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
   }, [dirty]);
+
+  useEffect(() => {
+    const keydown = event => {
+      if (preview || !documentRef.current) return;
+      const target = event.target;
+      const editing = target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
+      if (editing) return;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); navigateHistory(event.shiftKey ? 'redo' : 'undo'); }
+      else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'y') { event.preventDefault(); navigateHistory('redo'); }
+      else if (event.key === 'Escape') { setSelectedId(null); setSelectedRegion(null); }
+    };
+    window.addEventListener('keydown', keydown);
+    return () => window.removeEventListener('keydown', keydown);
+  }, [preview]);
 
   const save = async () => {
     if (!document || !currentPage || saving) return;
@@ -307,7 +344,7 @@ function App() {
     if (name === null) return;
     try {
       const project = (await api('/projects', jsonOptions('POST', { name }))).project;
-      setProjects(previous => [...previous, project]); setCurrentProject(project); setPages([]); setAssets([]); setDocument(null); setSavedDocument(null); setCurrentPage(null);
+      setProjects(previous => [...previous, project]); setCurrentProject(project); setPages([]); setAssets([]); replaceDocument(null); setSavedDocument(null); setCurrentPage(null);
       await createNewPage(project, true);
     } catch (cause) { setStatus({ message: `Create project failed: ${cause.message}`, tone: 'error' }); }
   };
@@ -343,7 +380,7 @@ function App() {
     try {
       const asset = await uploadImage(currentProject.id, file);
       setAssets(previous => [asset, ...previous]);
-      setDocument(previous => updateNode(previous, nodeId, { props: { src: asset.url } }));
+      commitDocument(previous => updateNode(previous, nodeId, { props: { src: asset.url } }));
       setStatus({ message: `${asset.filename} uploaded; save the page to keep its reference`, tone: 'success' });
     } catch (cause) { setStatus({ message: `Image upload failed: ${cause.message}`, tone: 'error' }); }
   };
@@ -389,11 +426,11 @@ function App() {
   };
   return <div className="app-shell">
     <header className="app-header"><div className="app-brand"><span className="brand-mark">✦</span><strong>Northstar Builder</strong></div>
-      <div className="header-actions"><select aria-label="Project" value={currentProject?.id || ''} onChange={event => chooseProject(event.target.value)} disabled={!projects.length}>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select><button className="toolbar-button" onClick={createNewProject}>New project</button><select aria-label="Page" value={currentPage?.id || ''} onChange={event => choosePage(event.target.value)} disabled={!pages.length}>{pages.map(page => <option key={page.id} value={page.id}>{page.name} · {page.path}</option>)}</select><button className="toolbar-button" disabled={!currentProject} onClick={() => createNewPage(currentProject)}>New page</button><button className="toolbar-button" disabled={!currentPage} onClick={changePagePath}>Path</button><span className={`save-indicator ${dirty ? 'dirty' : ''}`} data-save-state={dirty ? 'unsaved' : 'saved'}>{dirty ? 'Unsaved changes' : currentPage ? `Saved · v${currentPage.revision}` : 'No page'}</span><button className="toolbar-button" disabled={!dirty || saving || !currentPage} onClick={save}>{saving ? 'Saving…' : 'Save'}</button>{conflict && <button className="toolbar-button" onClick={saveAsCopy}>Save as copy</button>}<button className="toolbar-button" disabled={!currentPage} onClick={reloadPage}>Reload</button><button className="toolbar-button" disabled={!currentPage || preview} onClick={showHistory}>Revisions</button><button className="toolbar-button" disabled={!currentProject || preview} onClick={() => setShowExport(true)}>Export</button><button className="toolbar-button" disabled={!document} onClick={download}>Download JSON</button><button className="view-button" disabled={!document} onClick={togglePreview}>{preview ? 'Back to editor' : 'Preview page'}</button></div></header>
+      <div className="header-actions"><select aria-label="Project" value={currentProject?.id || ''} onChange={event => chooseProject(event.target.value)} disabled={!projects.length}>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select><button className="toolbar-button" onClick={createNewProject}>New project</button><select aria-label="Page" value={currentPage?.id || ''} onChange={event => choosePage(event.target.value)} disabled={!pages.length}>{pages.map(page => <option key={page.id} value={page.id}>{page.name} · {page.path}</option>)}</select><button className="toolbar-button" disabled={!currentProject} onClick={() => createNewPage(currentProject)}>New page</button><button className="toolbar-button" disabled={!currentPage} onClick={changePagePath}>Path</button><span className={`save-indicator ${dirty ? 'dirty' : ''}`} data-save-state={dirty ? 'unsaved' : 'saved'}>{dirty ? 'Unsaved changes' : currentPage ? `Saved · v${currentPage.revision}` : 'No page'}</span><button className="toolbar-button" disabled={!history.past.length || preview} onClick={() => navigateHistory('undo')} title="Undo (Ctrl/⌘+Z)">Undo</button><button className="toolbar-button" disabled={!history.future.length || preview} onClick={() => navigateHistory('redo')} title="Redo (Ctrl/⌘+Shift+Z)">Redo</button><button className="toolbar-button" disabled={!selectedId && !selectedRegion || preview} onClick={() => { setSelectedId(null); setSelectedRegion(null); }} title="Clear selection (Escape)">Clear selection</button><button className="toolbar-button" disabled={!dirty || saving || !currentPage} onClick={save}>{saving ? 'Saving…' : 'Save'}</button>{conflict && <button className="toolbar-button" onClick={saveAsCopy}>Save as copy</button>}<button className="toolbar-button" disabled={!currentPage} onClick={reloadPage}>Reload</button><button className="toolbar-button" disabled={!currentPage || preview} onClick={showHistory}>Revisions</button><button className="toolbar-button" disabled={!currentProject || preview} onClick={() => setShowExport(true)}>Export</button><button className="toolbar-button" disabled={!document} onClick={download}>Download JSON</button><button className="view-button" disabled={!document} onClick={togglePreview}>{preview ? 'Back to editor' : 'Preview page'}</button></div></header>
     {showRevisions && !preview && <div className="revision-popover"><strong>Page revisions</strong><p>Restoring creates a new revision.</p><label>Restore from<select aria-label="Revision to restore" value={chosenRevision} onChange={event => setChosenRevision(event.target.value)}>{revisions.map(item => <option key={item.revision} value={item.revision}>Revision {item.revision}</option>)}</select></label><button onClick={restore} disabled={!chosenRevision}>Restore revision</button></div>}
     {showExport && !preview && <div className="export-backdrop" role="presentation"><section className="export-dialog" role="dialog" aria-label="Export project"><div className="export-heading"><h2>Export project</h2><button aria-label="Close export" onClick={() => setShowExport(false)}>×</button></div><p>Download all saved pages and referenced assets as a source project.</p><label>Target<select aria-label="Export target" value={exportTarget} onChange={event => setExportTarget(event.target.value)}><option value="html">HTML5</option><option value="react">React JavaScript/JSX</option><option value="vue">Vue JavaScript</option></select></label>{dirty ? <p className="export-warning">Save the current page before exporting. Unsaved edits are not included.</p> : !exportReport && !exportError ? <p>Checking saved pages…</p> : exportReport && <><h3>Pages</h3><ul>{exportReport.pages.map(page => <li key={page.id}>{page.path} — {page.name}</li>)}</ul>{exportReport.issues.length ? <><h3>Resolve before download</h3><ul className="export-issues">{exportReport.issues.map((item, index) => <li key={index}>{item.pagePath || 'Project'}{item.nodeId ? ` · ${item.nodeId}` : ''} · {item.property}: {item.message}</li>)}</ul></> : <p className="export-ready">Ready to export {exportReport.pages.length} page(s).</p>}</>}{exportError && <p className="field-error" role="alert">{exportError}</p>}<button className="view-button" disabled={dirty || !exportReport || exportReport.issues.length > 0 || exportBusy} onClick={downloadExport}>{exportBusy ? 'Generating…' : 'Download ZIP'}</button></section></div>}
     <div className={`status-bar ${status.tone}`} role="status">{status.message}</div>
-    {error ? <div className="error">Could not load the project: {error}. Start the API and PostgreSQL with <code>npm run dev</code>. <button className="toolbar-button" onClick={() => window.location.reload()}>Retry connection</button></div> : !document ? <div className="loading">{currentProject ? 'No page open. Use New page to start editing.' : 'Loading page…'}</div> : preview ? <div className="preview-wrap"><div className="preview-toolbar"><strong>Preview</strong><ViewportSwitch breakpoint={breakpoint} onChange={setBreakpoint} /></div><div className="preview-stage" style={{ '--preview-desktop-width': `${previewDesktopWidth}px` }}><PageView document={document} interactive={false} breakpoint={breakpoint} /></div></div> : <Editor document={document} setDocument={setDocument} selectedId={selectedId} setSelectedId={setSelectedId} selectedRegion={selectedRegion} setSelectedRegion={setSelectedRegion} breakpoint={breakpoint} setBreakpoint={setBreakpoint} onStatus={(message, tone) => setStatus({ message, tone })} onUploadAsset={uploadAsset} assets={assets} />}
+    {error ? <div className="error">Could not load the project: {error}. Start the API and PostgreSQL with <code>npm run dev</code>. <button className="toolbar-button" onClick={() => window.location.reload()}>Retry connection</button></div> : !document ? <div className="loading">{currentProject ? 'No page open. Use New page to start editing.' : 'Loading page…'}</div> : preview ? <div className="preview-wrap"><div className="preview-toolbar"><strong>Preview</strong><ViewportSwitch breakpoint={breakpoint} onChange={setBreakpoint} /></div><div className="preview-stage" style={{ '--preview-desktop-width': `${previewDesktopWidth}px` }}><PageView document={document} interactive={false} breakpoint={breakpoint} /></div></div> : <Editor document={document} setDocument={commitDocument} selectedId={selectedId} setSelectedId={setSelectedId} selectedRegion={selectedRegion} setSelectedRegion={setSelectedRegion} breakpoint={breakpoint} setBreakpoint={setBreakpoint} onStatus={(message, tone) => setStatus({ message, tone })} onUploadAsset={uploadAsset} assets={assets} />}
   </div>;
 }
 

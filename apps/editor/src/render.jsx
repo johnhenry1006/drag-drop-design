@@ -22,6 +22,9 @@ function NodeView({ node, selectedId, onSelect, dropTarget, depth }) {
     'data-drop': dropTarget?.targetId === `canvas-node:${node.id}` && dropTarget.valid ? dropTarget.placement : undefined,
     'data-drop-invalid': dropTarget?.targetId === `canvas-node:${node.id}` && !dropTarget.valid ? 'true' : undefined,
     'data-empty': node.children?.length === 0 ? 'true' : undefined,
+    tabIndex: onSelect ? 0 : undefined,
+    'aria-label': onSelect ? `Select ${node.type}: ${node.props.label || node.props.text || node.type}` : undefined,
+    onKeyDown: onSelect ? event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); onSelect(node.id); } } : undefined,
     onClick: onSelect ? event => { event.preventDefault(); event.stopPropagation(); onSelect(node.id); } : undefined
   };
   return renderers[registry[node.type].renderer](node, content, common);
