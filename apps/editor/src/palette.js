@@ -25,7 +25,8 @@ export const paletteItems = [
   { key: 'Switch', label: 'Switch', group: 'Forms', icon: '◖' },
   { key: 'Toggle Button', label: 'Toggle Button', group: 'Forms', icon: '▣' },
   { key: 'Rating', label: 'Rating', group: 'Forms', icon: '★' },
-  { key: 'Slider', label: 'Slider', group: 'Forms', icon: '━' }
+  { key: 'Slider', label: 'Slider', group: 'Forms', icon: '━' },
+  { key: 'Autocomplete', label: 'Autocomplete', group: 'Forms', icon: '⌕' }
 ];
 
 const styles = desktop => ({ desktop, tablet: {}, mobile: {} });
@@ -62,9 +63,9 @@ export function createPaletteNode(key) {
     const rows = registry.Table.defaults.rows.map(row => ({ id: id(), cells: Object.fromEntries(registry.Table.defaults.columns.map((column, index) => [columns[index].id, row.cells[column.id]])) }));
     return basic(key, { columns, rows });
   }
-  if (['Checkbox', 'Radio Group', 'Switch', 'Toggle Button', 'Rating', 'Slider'].includes(key)) {
+  if (['Checkbox', 'Radio Group', 'Switch', 'Toggle Button', 'Rating', 'Slider', 'Autocomplete'].includes(key)) {
     const node = basic(key, { name: `field_${id()}` });
-    if (key === 'Radio Group') {
+    if (key === 'Radio Group' || key === 'Autocomplete') {
       const options = registry[key].defaults.options.map(option => ({ ...option, id: id() }));
       node.props.options = options;
     }

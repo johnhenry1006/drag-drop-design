@@ -89,6 +89,21 @@ function RangeFields({ node, onChange }) {
   </>;
 }
 
+function AutocompleteFields({ node, onChange }) {
+  const p = node.props;
+  const set = patch => onChange(node.id, { props: patch });
+  const commit = (key, required = true) => <label className="field" key={key}><span>{{ name: 'Field name', label: 'Accessible label', placeholder: 'Placeholder', emptyText: 'Empty-list text', noResultsText: 'No-results text' }[key]}</span><input key={`${node.id}-${key}-${p[key]}`} defaultValue={p[key]} onBlur={event => { const value = event.target.value; const valid = key === 'name' ? /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(value) : value.length <= 200 && (!required || Boolean(value.trim())); if (valid) set({ [key]: value }); else event.target.value = p[key]; }} /></label>;
+  const optionChange = (id, patch) => set({ options: p.options.map(option => option.id === id ? { ...option, ...patch } : option) });
+  return <>{commit('name')}{commit('label')}{commit('placeholder', false)}{commit('emptyText')}{commit('noResultsText')}
+    <label className="field"><span><input type="checkbox" checked={p.required} onChange={event => set({ required: event.target.checked })} /> Required</span></label>
+    <label className="field"><span><input type="checkbox" checked={p.disabled} onChange={event => set({ disabled: event.target.checked })} /> Disabled</span></label>
+    <h3>Options</h3>{p.options.map((option, index) => <div className="structured-row" key={option.id}><strong>Option {index + 1} · {option.id}</strong><label className="field"><span>Option {index + 1} label</span><input key={`${option.id}-label-${option.label}`} defaultValue={option.label} onBlur={event => { if (event.target.value.trim() && event.target.value.length <= 200) optionChange(option.id, { label: event.target.value }); else event.target.value = option.label; }} /></label><label className="field"><span>Option {index + 1} value</span><input key={`${option.id}-value-${option.value}`} defaultValue={option.value} onBlur={event => { if (event.target.value.trim() && event.target.value.length <= 100) optionChange(option.id, { value: event.target.value }); else event.target.value = option.value; }} /></label><div className="order-actions"><button aria-label={`Move option ${index + 1} up`} disabled={index === 0} onClick={() => set({ options: swap(p.options, index, index - 1) })}>↑</button><button aria-label={`Move option ${index + 1} down`} disabled={index === p.options.length - 1} onClick={() => set({ options: swap(p.options, index, index + 1) })}>↓</button><button aria-label={`Remove option ${index + 1}`} onClick={() => set({ options: p.options.filter(current => current.id !== option.id), defaultOptionId: p.defaultOptionId === option.id ? '' : p.defaultOptionId })}>Remove</button></div></div>)}
+    <button disabled={p.options.length >= 100} onClick={() => { const id = structuredId('option'); set({ options: [...p.options, { id, label: 'New option', value: id }] }); }}>Add option</button>
+    <label className="field"><span>Initial selection</span><select value={p.defaultOptionId} onChange={event => set({ defaultOptionId: event.target.value })}><option value="">None</option>{p.options.map(option => <option key={option.id} value={option.id}>{option.label} · {option.value}</option>)}</select></label>
+    <p className="property-note">Filtering uses these options locally. Visitor text and selection stay in runtime state; no remote search or submission is configured.</p>
+  </>;
+}
+
 function ContentTab({ node, location, siblingCount, onChange, onReorder, onRemove, onUploadAsset, assets }) {
   const props = node.props;
   const textLabel = node.type === 'Button' ? 'Button label' : node.type === 'Link' ? 'Link label' : node.type === 'Heading' ? 'Heading text' : 'Text';
@@ -109,6 +124,7 @@ function ContentTab({ node, location, siblingCount, onChange, onReorder, onRemov
     {node.type === 'Tooltip' && <>{['trigger', 'content'].map(key => <label className="field" key={key}><span>{key === 'trigger' ? 'Trigger label' : 'Tooltip content'}</span><input defaultValue={props[key]} key={`${node.id}-${key}-${props[key]}`} onBlur={event => { if (event.target.value.trim()) onChange(node.id, { props: { [key]: event.target.value } }); else event.target.value = props[key]; }} /></label>)}{choice('placement', 'Placement', [['top', 'Top'], ['bottom', 'Bottom'], ['left', 'Left'], ['right', 'Right']])}</>}
     {['Checkbox', 'Radio Group', 'Switch', 'Toggle Button'].includes(node.type) && <ControlFields node={node} onChange={onChange} />}
     {['Rating', 'Slider'].includes(node.type) && <RangeFields node={node} onChange={onChange} />}
+    {node.type === 'Autocomplete' && <AutocompleteFields node={node} onChange={onChange} />}
     {(node.type === 'Button' || node.type === 'Link') && <label className="field"><span>Link destination</span><input value={props.href} placeholder="#section or https://…" onChange={event => onChange(node.id, { props: { href: event.target.value } })} /></label>}
     <p className="property-note">Export: {registry[node.type].exports.join(', ').toUpperCase()}. {registry[node.type].exportNote || 'Static content and styles are supported.'}</p>
     <div className="property-divider" /><h3>Order in parent</h3><div className="order-actions"><button disabled={location.index === 0} onClick={() => onReorder(node.id, location.index - 1)}>↑ Move up</button><button disabled={location.index >= siblingCount - 1} onClick={() => onReorder(node.id, location.index + 1)}>↓ Move down</button></div><button className="remove-node" onClick={() => onRemove(node.id)}>Remove selected node</button>

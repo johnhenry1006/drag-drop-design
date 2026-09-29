@@ -22,8 +22,29 @@ const renderers = {
   switch: (node, content, common) => <ControlNode node={node} common={common} />,
   toggle: (node, content, common) => <ControlNode node={node} common={common} />,
   rating: (node, content, common) => <RangeNode node={node} common={common} />,
-  slider: (node, content, common) => <RangeNode node={node} common={common} />
+  slider: (node, content, common) => <RangeNode node={node} common={common} />,
+  autocomplete: (node, content, common) => <AutocompleteNode node={node} common={common} />
 };
+
+function AutocompleteNode({ node, common }) {
+  const p = node.props;
+  const editing = Boolean(common.onClick);
+  const initial = p.options.find(option => option.id === p.defaultOptionId);
+  const [query, setQuery] = useState(initial?.label || '');
+  const [selectedId, setSelectedId] = useState(p.defaultOptionId);
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(-1);
+  const shown = editing ? initial?.label || '' : query;
+  const filtered = p.options.filter(option => `${option.label} ${option.value}`.toLocaleLowerCase().includes(shown.toLocaleLowerCase()));
+  const listId = `autocomplete-${node.id}-list`;
+  const optionId = id => `autocomplete-${node.id}-${id}`;
+  const choose = option => { setSelectedId(option.id); setQuery(option.label); setOpen(false); setActive(-1); };
+  return <div {...common} className="builder-autocomplete" data-disabled={p.disabled ? 'true' : undefined} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) { setOpen(false); setActive(-1); } }}>
+    <label htmlFor={`autocomplete-${node.id}-input`}>{p.label}</label>
+    <input id={`autocomplete-${node.id}-input`} type="text" role="combobox" name={p.name} placeholder={p.placeholder} value={shown} disabled={editing || p.disabled} style={editing ? { pointerEvents: 'none' } : undefined} required={p.required} aria-required={p.required} aria-autocomplete="list" aria-expanded={!editing && open} aria-controls={!editing && open ? listId : undefined} aria-activedescendant={!editing && open && active >= 0 ? optionId(filtered[active].id) : undefined} autoComplete="off" onFocus={() => setOpen(true)} onClick={() => setOpen(true)} onChange={event => { setQuery(event.target.value); setSelectedId(''); setOpen(true); setActive(-1); }} onKeyDown={event => { if (event.key === 'Escape') { setOpen(false); setActive(-1); event.preventDefault(); } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setOpen(true); if (filtered.length) setActive(index => event.key === 'ArrowDown' ? (index + 1) % filtered.length : (index < 0 ? filtered.length - 1 : (index - 1 + filtered.length) % filtered.length)); } else if (event.key === 'Enter' && open && active >= 0 && filtered[active]) { event.preventDefault(); choose(filtered[active]); } }} />
+    {!editing && open && <div id={listId} role="listbox" aria-label={`${p.label} options`} className="builder-autocomplete-list">{filtered.length ? filtered.map((option, index) => <div key={option.id} id={optionId(option.id)} role="option" aria-selected={selectedId === option.id} data-active={active === index ? 'true' : undefined} onPointerDown={event => event.preventDefault()} onClick={() => choose(option)}><span>{option.label}</span><small>{option.value}</small></div>) : <div className="builder-autocomplete-empty" role="status">{p.options.length ? p.noResultsText : p.emptyText}</div>}</div>}
+  </div>;
+}
 
 function RangeNode({ node, common }) {
   const p = node.props;
