@@ -1,5 +1,7 @@
 # Deployment preparation (no deployment performed)
 
+For the exact operator sequence, required infrastructure inputs, migrations, backup/rollback, and staging smoke checks, use [RUNBOOK.md](RUNBOOK.md). No hosting provider, real domain, database or bucket resource, or secret-management service has been selected in this repository. The Compose file is provider-neutral and does not provision those resources.
+
 ## Intended topology and decisions
 
 Serve the built editor and `/api` from one HTTPS origin. The Nginx web container serves static files and proxies API requests to a private Fastify container. Use a private PostgreSQL 17+ database and a private S3-compatible bucket. TLS terminates at a trusted ingress in front of the web container; the included Compose file binds web only to localhost. Keep the API, database, and bucket off the public network. The S3 bucket must block public access, allow only the API identity to read/write its `projects/` prefix, and have versioning and offsite backup enabled. Prefer provider workload identity to static S3 keys.

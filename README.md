@@ -59,4 +59,4 @@ Outputs are in `generated/html`, `generated/react`, and `generated/vue`. Serve `
 
 ## Deployment preparation
 
-See [deploy/README.md](deploy/README.md) for the same-origin HTTPS topology, private PostgreSQL and S3 prerequisites, environment variables, migrations, account provisioning, backup/restore, verification, remaining safeguards, and go/no-go checklist. The repository includes production API and static editor images plus an example Compose file; no deployment is performed by the verification commands.
+See [deploy/README.md](deploy/README.md) for the deployment preparation report and [deploy/RUNBOOK.md](deploy/RUNBOOK.md) for the operator sequence, required inputs, migrations, backup/restore, verification, and release gate. The repository includes production API and static editor images plus an example Compose file; no deployment is performed by the verification commands.

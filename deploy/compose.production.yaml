@@ -1,4 +1,16 @@
 services:
+  migrate:
+    profiles: [ops]
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+    env_file: ../.env.production
+    environment:
+      NODE_ENV: production
+      AUTH_MODE: local
+      ASSET_STORE: s3
+    command: ["npm", "run", "db:migrate", "-w", "@builder/api"]
+    restart: "no"
   api:
     build:
       context: ..
