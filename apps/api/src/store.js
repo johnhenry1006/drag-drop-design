@@ -137,15 +137,34 @@ export async function getAsset(id) {
   return (await pool.query(`SELECT ${assetColumns}, contents, object_key AS "objectKey", object_bucket AS "objectBucket" FROM assets WHERE id=$1`, [id])).rows[0] || null;
 }
 export async function assetContents(asset) {
-  return asset.objectKey ? getObject(asset.objectKey, asset.objectBucket || assetBucket()) : asset.contents;
+  if (asset.objectKey && assetStorageMode() === 's3') return getObject(asset.objectKey, asset.objectBucket || assetBucket());
+  if (asset.contents) return asset.contents;
+  if (asset.objectKey) return getObject(asset.objectKey, asset.objectBucket || assetBucket());
+  return null;
 }
 
-export async function projectExportData(projectId, includeContents = true) {
+export async function projectExportData(projectId) {
   const [pages, assets] = await Promise.all([
     pool.query('SELECT id, name, path, document FROM pages WHERE project_id=$1 ORDER BY path, id', [projectId]),
-    pool.query(`SELECT ${assetColumns}, contents, object_key AS "objectKey", object_bucket AS "objectBucket" FROM assets WHERE project_id=$1`, [projectId])
+    pool.query(`SELECT ${assetColumns} FROM assets WHERE project_id=$1`, [projectId])
   ]);
-  const totalBytes = assets.rows.reduce((sum, asset) => sum + asset.byteLength, 0);
-  if (pages.rows.length > 100 || (includeContents && totalBytes > 100 * 1024 * 1024)) throw Object.assign(new Error('Export exceeds the page or asset size limit'), { statusCode: 413 });
-  return { pages: pages.rows, assets: includeContents ? await Promise.all(assets.rows.map(async asset => ({ ...asset, contents: await assetContents(asset) }))) : assets.rows };
+  if (pages.rows.length > 100) throw Object.assign(new Error('Export exceeds the page limit'), { statusCode: 413 });
+  return { pages: pages.rows, assets: assets.rows };
+}
+
+export async function projectExportAssets(projectId, assetIds) {
+  if (!assetIds.length) return [];
+  const rows = (await pool.query(`SELECT ${assetColumns}, contents, object_key AS "objectKey", object_bucket AS "objectBucket" FROM assets WHERE project_id=$1 AND id=ANY($2::uuid[])`, [projectId, assetIds])).rows;
+  const byId = new Map(rows.map(asset => [asset.id, asset]));
+  const totalBytes = rows.reduce((sum, asset) => sum + asset.byteLength, 0);
+  if (totalBytes > 100 * 1024 * 1024) throw Object.assign(new Error('Referenced assets exceed the 100 MB export limit'), { statusCode: 413 });
+  return Promise.all(assetIds.map(async id => {
+    const asset = byId.get(id);
+    if (!asset) throw Object.assign(new Error(`Referenced asset ${id} is missing`), { statusCode: 422 });
+    let contents;
+    try { contents = await assetContents(asset); }
+    catch { throw Object.assign(new Error(`Referenced asset ${id} cannot be read from storage`), { statusCode: 422 }); }
+    if (!contents || contents.length !== asset.byteLength || createHash('sha256').update(contents).digest('hex') !== asset.sha256) throw Object.assign(new Error(`Referenced asset ${id} failed integrity verification`), { statusCode: 422 });
+    return { ...asset, contents };
+  }));
 }

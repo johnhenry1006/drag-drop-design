@@ -16,10 +16,15 @@ test('ZIP exports include saved paths, responsive CSS, bundled assets, and exact
     projectId = (await send('POST', '/api/projects', { name: 'Export integration' })).json().project.id;
     const uploaded = await app.inject({ method: 'POST', url: `/api/projects/${projectId}/assets`, payload: png, headers: { 'content-type': 'image/png', 'x-file-name': 'logo.png' } });
     const asset = uploaded.json().asset;
+    const unused = (await app.inject({ method: 'POST', url: `/api/projects/${projectId}/assets`, payload: png, headers: { 'content-type': 'image/png', 'x-file-name': 'unused.png' } })).json().asset;
+    if (process.env.ASSET_STORE === 's3') await pool.query('UPDATE assets SET object_key=$2 WHERE id=$1', [unused.id, 'assets/missing-unused']);
+    else await pool.query('UPDATE assets SET contents=$2 WHERE id=$1', [unused.id, Buffer.from('unavailable')]);
     let home = structuredClone(samplePage);
     home = updateNode(home, 'nav_about', { props: { href: '/about' } });
     home = updateNode(home, 'hero_inner', { styles: { mobile: { gridTemplateColumns: '1fr', gap: '12px' } } });
     home = addNode(home, 'header', 0, { id: 'uploaded_logo', type: 'Image', props: { src: asset.url, alt: 'Uploaded logo' }, styles: { desktop: { width: '80px' }, tablet: {}, mobile: { width: '48px' } } });
+    home = addNode(home, 'main', 0, { id: 'uploaded_logo_main', type: 'Image', props: { src: asset.url, alt: 'Uploaded logo in main' }, styles: { desktop: {}, tablet: {}, mobile: {} } });
+    home = addNode(home, 'footer', 0, { id: 'uploaded_logo_footer', type: 'Image', props: { src: asset.url, alt: 'Uploaded logo in footer' }, styles: { desktop: {}, tablet: {}, mobile: {} } });
     let about = structuredClone(samplePage);
     about.props.title = 'About & Contact';
     about = updateNode(about, 'nav_work', { props: { href: '/' } });
@@ -49,6 +54,9 @@ test('ZIP exports include saved paths, responsive CSS, bundled assets, and exact
       assert.ok(files['package.json']);
       const assetName = `${target === 'html' ? '' : 'public/'}assets/${asset.id}.png`;
       assert.deepEqual(Buffer.from(files[assetName]), png);
+      assert.equal(Object.keys(files).filter(name => name.endsWith(`/assets/${asset.id}.png`) || name === `assets/${asset.id}.png`).length, 1);
+      assert.equal(Object.keys(files).some(name => name.includes(unused.id)), false);
+      assert.equal(Object.entries(files).filter(([name]) => name.endsWith('.html') || name === 'src/pages.jsx' || name === 'src/pages.js').some(([, bytes]) => /\/api\/assets\/|localhost|s3-ninja/.test(strFromU8(bytes))), false);
       const css = strFromU8(files[target === 'html' ? 'styles.css' : 'src/styles.css']);
       assert.match(css, /@media \(max-width: 900px\)/);
       assert.match(css, /@media \(max-width: 600px\)/);
@@ -63,6 +71,21 @@ test('ZIP exports include saved paths, responsive CSS, bundled assets, and exact
         assert.match(pageSource, /\/about/);
         assert.match(pageSource, new RegExp(`assets/${asset.id}\\.png`));
       }
+    }
+    const missingDocument = updateNode(home, 'uploaded_logo', { props: { src: '/api/assets/00000000-0000-4000-8000-000000000099/content' } });
+    await send('PUT', `/api/pages/${homePage.id}`, { expectedRevision: 3, document: missingDocument });
+    const missing = await send('GET', `/api/projects/${projectId}/exports/html.zip`);
+    assert.equal(missing.statusCode, 422);
+    assert.match(missing.json().issues[0].message, /missing/);
+    await send('PUT', `/api/pages/${homePage.id}`, { expectedRevision: 4, document: home });
+    if (process.env.ASSET_STORE === 's3') {
+      const original = (await pool.query('SELECT object_key FROM assets WHERE id=$1', [asset.id])).rows[0].object_key;
+      await pool.query('UPDATE assets SET object_key=$2 WHERE id=$1', [asset.id, 'assets/missing-referenced']);
+      try {
+        const unavailable = await send('GET', `/api/projects/${projectId}/exports/html.zip`);
+        assert.equal(unavailable.statusCode, 422);
+        assert.match(unavailable.json().error, new RegExp(`Referenced asset ${asset.id} cannot be read`));
+      } finally { await pool.query('UPDATE assets SET object_key=$2 WHERE id=$1', [asset.id, original]); }
     }
   } finally {
     if (projectId) await pool.query('DELETE FROM projects WHERE id=$1', [projectId]);

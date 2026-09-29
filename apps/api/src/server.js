@@ -2,12 +2,12 @@ import Fastify from 'fastify';
 import { zipSync, strToU8 } from 'fflate';
 import { imageSize } from 'image-size';
 import { samplePage } from '@builder/document';
-import { analyzeProjectExport, buildProjectFiles } from '@builder/exporters/project';
+import { analyzeProjectExport, buildProjectFiles, referencedAssetIds } from '@builder/exporters/project';
 import { checkDatabase, pool } from './db.js';
 import { assetContents } from './store.js';
 import { checkObjectStore } from './object-store.js';
 import { authMode, clearCookie, cookie, currentUser, ownsAsset, ownsPage, ownsProject, sessionToken, signIn, signOut } from './auth.js';
-import { createAsset, createPage, createProject, getAsset, getPage, getProject, getRevision, listAssets, listPages, listProjects, listRevisions, migrate, projectExportData, restorePage, savePage, updateProject, validDocument } from './store.js';
+import { createAsset, createPage, createProject, getAsset, getPage, getProject, getRevision, listAssets, listPages, listProjects, listRevisions, migrate, projectExportAssets, projectExportData, restorePage, savePage, updateProject, validDocument } from './store.js';
 
 export const app = Fastify({ logger: process.env.NODE_ENV !== 'test', bodyLimit: 2 * 1024 * 1024, requestTimeout: 30000, trustProxy: process.env.TRUST_PROXY === 'true' });
 const missing = (reply, kind) => reply.code(404).send({ error: `${kind} not found` });
@@ -169,7 +169,7 @@ app.get('/api/assets/:assetId/content', async (request, reply) => {
 app.get('/api/projects/:projectId/exports/:target/check', async (request, reply) => {
   const id = uuid(request.params.projectId);
   if (!await getProject(id)) return missing(reply, 'Project');
-  const { pages, assets } = await projectExportData(id, false);
+  const { pages, assets } = await projectExportData(id);
   return { target: request.params.target, pages: pages.map(page => ({ id: page.id, name: page.name, path: page.path })), issues: analyzeProjectExport(request.params.target, pages, assets) };
 });
 app.get('/api/projects/:projectId/exports/:target.zip', async (request, reply) => {
@@ -179,7 +179,8 @@ app.get('/api/projects/:projectId/exports/:target.zip', async (request, reply) =
   const { pages, assets } = await projectExportData(id);
   const issues = analyzeProjectExport(request.params.target, pages, assets);
   if (issues.length) return reply.code(422).send({ error: 'Export has unsupported content', issues });
-  const files = buildProjectFiles(request.params.target, pages, assets);
+  const referenced = await projectExportAssets(id, referencedAssetIds(pages));
+  const files = buildProjectFiles(request.params.target, pages, referenced);
   const archive = zipSync(Object.fromEntries(Object.entries(files).map(([name, value]) => [name, typeof value === 'string' ? strToU8(value) : new Uint8Array(value)])), { level: 6 });
   const filename = `${project.name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '') || 'website'}-${request.params.target}.zip`;
   return reply.type('application/zip').header('Content-Disposition', `attachment; filename="${filename}"`).send(Buffer.from(archive));

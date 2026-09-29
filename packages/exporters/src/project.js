@@ -16,6 +16,24 @@ function walk(document, visit) {
   regions.forEach(region => document.regions[region].forEach(visitNode));
 }
 
+export function referencedAssetIds(pages) {
+  const ids = new Set();
+  for (const page of pages) walk(page.document, node => {
+    if (node.type !== 'Image') return;
+    const match = assetPattern.exec(node.props.src);
+    if (match) ids.add(match[1]);
+  });
+  return [...ids];
+}
+
+function localAssetDependency(src) {
+  if (!/^https?:\/\//i.test(src)) return false;
+  try {
+    const url = new URL(src);
+    return ['localhost', '127.0.0.1', '[::1]', 's3-ninja'].includes(url.hostname) || url.hostname.endsWith('.localhost') || assetPattern.test(url.pathname);
+  } catch { return true; }
+}
+
 function hrefRoute(value) {
   if (!value.startsWith('/') || value.startsWith('//')) return null;
   const [path] = value.split(/[?#]/, 1);
@@ -48,6 +66,8 @@ export function analyzeProjectExport(target, pages, assets = []) {
         if (match) {
           const asset = assetsById.get(match[1]);
           if (!asset || !mediaExtensions[asset.mediaType]) issues.push(issue(page, node, 'src', `Asset ${match[1]} is missing or unsupported`));
+        } else if (localAssetDependency(src)) {
+          issues.push(issue(page, node, 'src', `Image source ${src} depends on a local service or the editor API`));
         } else if (!/^https?:\/\//i.test(src) && !/^data:image\/(?:png|jpeg|gif|webp|svg\+xml)[;,]/i.test(src)) {
           issues.push(issue(page, node, 'src', `Image source ${src || '(empty)'} cannot be bundled`));
         }
@@ -77,7 +97,7 @@ function urlMapper(target, page, assetsById) {
       if (!match) return value;
       const asset = assetsById.get(match[1]);
       const file = `assets/${asset.id}.${mediaExtensions[asset.mediaType]}`;
-      return target === 'html' ? relativeUrl(page.path, file) : `/${file}`;
+      return target === 'html' ? relativeUrl(page.path, file) : `./${file}`;
     }
     if (value.startsWith('/') && !value.startsWith('//')) {
       const route = hrefRoute(value);
@@ -128,26 +148,22 @@ export function buildProjectFiles(target, pages, assets = []) {
   } else if (target === 'react') {
     files['package.json'] = packageFile('builder-react-export', { react: '^19.2.0', 'react-dom': '^19.2.0', vite: '^6.3.0' });
     files['README.md'] = readme(target, pages);
-    files['index.html'] = '<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Exported site</title></head><body><div id="app"></div><script type="module" src="/src/main.jsx"></script></body></html>\n';
+    files['index.html'] = '<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base href="/"><title>Exported site</title></head><body><div id="app"></div><script type="module" src="/src/main.jsx"></script></body></html>\n';
     files['src/styles.css'] = projectCss(pages);
     files['src/pages.jsx'] = `import React from 'react';\nexport const pages = [${pages.map(page => `{path:${JSON.stringify(page.path)},title:${JSON.stringify(page.document.props.title)},render:()=> <div className=${JSON.stringify(pageClass(page))}>${jsxRegions(page.document, urlMapper(target, page, assetsById))}</div>}`).join(',')}];\n`;
     files['src/main.jsx'] = `import React, { useEffect, useState } from 'react';\nimport { createRoot } from 'react-dom/client';\nimport { pages } from './pages.jsx';\nimport './styles.css';\nconst route = () => window.location.pathname.replace(/\\/$/, '') || '/';\nfunction App(){const [path,setPath]=useState(route);useEffect(()=>{const update=()=>setPath(route());window.addEventListener('popstate',update);return()=>window.removeEventListener('popstate',update)},[]);const page=pages.find(item=>item.path===path);useEffect(()=>{document.title=page?.title||'Not found'},[page]);const navigate=event=>{const anchor=event.target.closest('a[href]');if(!anchor)return;const url=new URL(anchor.href);if(url.origin!==window.location.origin||!pages.some(item=>item.path===(url.pathname.replace(/\\/$/,'')||'/')))return;event.preventDefault();window.history.pushState({},'',url.pathname+url.search+url.hash);setPath(route())};return <div onClick={navigate}>{page?page.render():<main><h1>Page not found</h1><a href="/">Home</a></main>}</div>}\ncreateRoot(document.getElementById('app')).render(<App />);\n`;
   } else {
     files['package.json'] = packageFile('builder-vue-export', { vue: '^3.5.0', vite: '^6.3.0' });
     files['README.md'] = readme(target, pages);
-    files['index.html'] = '<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Exported site</title></head><body><div id="app"></div><script type="module" src="/src/main.js"></script></body></html>\n';
+    files['index.html'] = '<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base href="/"><title>Exported site</title></head><body><div id="app"></div><script type="module" src="/src/main.js"></script></body></html>\n';
     files['src/styles.css'] = projectCss(pages);
     files['src/pages.js'] = `import { h } from 'vue';\nexport const pages = [${pages.map(page => `{path:${JSON.stringify(page.path)},title:${JSON.stringify(page.document.props.title)},render:()=>h('div',{class:${JSON.stringify(pageClass(page))}},[${vueRegions(page.document, urlMapper(target, page, assetsById))}])}`).join(',')}];\n`;
     files['src/main.js'] = `import { createApp, h, ref, onMounted, onUnmounted, watch } from 'vue';\nimport { pages } from './pages.js';\nimport './styles.css';\nconst route=()=>window.location.pathname.replace(/\\/$/,'')||'/';\ncreateApp({setup(){const path=ref(route());const update=()=>{path.value=route()};onMounted(()=>window.addEventListener('popstate',update));onUnmounted(()=>window.removeEventListener('popstate',update));watch(path,()=>{document.title=pages.find(item=>item.path===path.value)?.title||'Not found'},{immediate:true});const navigate=event=>{const anchor=event.target.closest('a[href]');if(!anchor)return;const url=new URL(anchor.href);if(url.origin!==window.location.origin||!pages.some(item=>item.path===(url.pathname.replace(/\\/$/,'')||'/')))return;event.preventDefault();window.history.pushState({},'',url.pathname+url.search+url.hash);update()};return()=>h('div',{onClick:navigate},[pages.find(item=>item.path===path.value)?.render()||h('main',[h('h1','Page not found'),h('a',{href:'/'},'Home')])])}}).mount('#app');\n`;
   }
+  const referenced = new Set(referencedAssetIds(pages));
   for (const asset of assets) {
     if (!mediaExtensions[asset.mediaType]) continue;
-    const referenced = pages.some(page => {
-      let found = false;
-      walk(page.document, node => { if (node.type === 'Image' && node.props.src === `/api/assets/${asset.id}/content`) found = true; });
-      return found;
-    });
-    if (referenced) files[`${target === 'html' ? '' : 'public/'}assets/${asset.id}.${mediaExtensions[asset.mediaType]}`] = asset.contents;
+    if (referenced.has(asset.id)) files[`${target === 'html' ? '' : 'public/'}assets/${asset.id}.${mediaExtensions[asset.mediaType]}`] = asset.contents;
   }
   return files;
 }

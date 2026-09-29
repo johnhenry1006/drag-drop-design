@@ -35,11 +35,27 @@ npm run verify:exports
 
 `npm run verify:exports` requires the running editor and API. It creates a temporary two-page project, downloads and unzips HTML5, React JSX, and Vue ZIPs into ignored `generated/verification/`, builds and serves all three, compares content and computed spacing with Preview at desktop and mobile viewports, checks bundled image rendering and `/about` navigation, then removes its temporary database project.
 
+### Migrate older local image bytes
+
+Pages and revisions keep stable `/api/assets/{id}/content` references; moving bytes does not edit Page JSON. With the local S3 environment loaded as above, inspect and copy older PostgreSQL `bytea` assets:
+
+```bash
+npm run assets:backfill -w @builder/api -- --dry-run
+npm run assets:backfill -w @builder/api -- --migrate
+npm run assets:backfill -w @builder/api -- --verify
+```
+
+The dry-run validates source checksums and reports pending, dual-backed, and object-only counts without writing. Migration is resumable: it uploads each object, checks its bytes, records bucket/key, then reads through the API storage path. Rerunning it skips completed assets and verifies them again. **Original PostgreSQL bytes remain present.** If `pending` is zero, no migration is needed. For a local rollback, run `npm run assets:backfill -w @builder/api -- --rollback` with the same S3 bucket configuration. It validates retained database bytes and switches dual-backed rows for that bucket back to database reads; object-only uploads are untouched. Rerun `--migrate` after correcting the problem. Back up PostgreSQL and the S3 Ninja volume before any later cleanup, and do not use `docker compose down -v` on data you need.
+
 PostgreSQL stores projects, pages, immutable page revisions, account sessions, and asset metadata. New local uploads use S3 Ninja when `ASSET_STORE=s3`; older database-byte assets remain readable and are not changed by this setup. PostgreSQL records the bucket, opaque object key, checksum, and other metadata for new objects. Production requires a private S3-compatible object store. Page documents are versioned JSONB and are validated with `@builder/document` before create, update, or restore. The API seeds a sample project and page once. Page saves use an expected revision and return HTTP 409 when another save has won; restoring an old revision creates a new current revision.
+
+S3 Ninja is a **local test emulator**. Production requires a separately validated durable self-hosted S3-compatible service with tested backup and restore, private access controls, and an operations owner. This setup does not publish S3 Ninja or select a paid cloud service.
 
 The toolbar creates and opens projects and pages, marks unsaved changes, saves, reloads, and restores revisions. It remembers the last opened page in this browser. A conflicting save keeps local edits and offers **Save as copy**. An Image node's Content tab uploads validated PNG, JPEG, GIF, or WebP files up to 10 MB, or reuses an asset already in the project. Each upload gets a stable `/api/assets/{id}/content` URL; removing a node never deletes its asset. Asset bytes remain available to Preview after reload and restoration.
 
 Each page has a stored path such as `/` or `/about`. The New page and Path controls create or change it; paths are unique within a project. **Export** checks every saved page, node, CSS property, link, and asset for the selected target. It shows exact unsupported items before enabling Download ZIP. Save unsaved edits first. ZIPs contain all saved pages, referenced uploaded assets, desktop/tablet/mobile CSS, and a target-specific README. HTML5 uses directory index files and relative links. React and Vue use client-side History API routing; production hosts need a fallback to `index.html` for nested paths. The generated projects include `dev`, `build`, and `preview` package scripts.
+
+Exports read each distinct referenced asset through the server storage adapter and bundle it in the ZIP. A missing or corrupt referenced asset fails export with its ID; unreferenced assets are not fetched. The resulting projects serve bundled images from their own `assets/` directory and need no S3 Ninja or editor API connection. External image URLs intentionally remain external and still require their original hosts; local-service and editor-API image URLs are rejected.
 
 API routes include `GET/POST /api/projects`, `GET/PATCH /api/projects/:id`, `GET/POST /api/projects/:id/pages`, `GET/PUT /api/pages/:id`, `GET /api/pages/:id/revisions`, `GET /api/pages/:id/revisions/:revision`, `POST /api/pages/:id/restore`, `GET/POST /api/projects/:id/assets`, `GET /api/assets/:id`, `GET /api/assets/:id/content`, plus `GET /api/projects/:id/exports/:target/check` and `GET /api/projects/:id/exports/:target.zip`. Account routes are `GET /api/auth/me`, `POST /api/auth/login`, and `POST /api/auth/logout`. Local development defaults to open access; production requires local-account sessions and owner-scoped API access. There is no asset deletion endpoint. Exported ZIPs bundle referenced uploaded images; external image URLs still depend on their hosts.
 
