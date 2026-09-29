@@ -36,6 +36,9 @@ test('sessions and project ownership cover pages, revisions, assets and exports'
       assert.equal((await send('GET', url, undefined, two)).statusCode, 404, url);
     }
     assert.equal((await send('PUT', `/api/pages/${page.id}`, { expectedRevision: 1, document: samplePage }, two)).statusCode, 404);
+    assert.equal((await send('PATCH', `/api/pages/${page.id}`, { expectedRevision: 1, name: 'Stolen' }, two)).statusCode, 404);
+    assert.equal((await send('POST', `/api/pages/${page.id}/move`, { expectedRevision: 1, parentPageId: null, index: 0 }, two)).statusCode, 404);
+    assert.equal((await send('DELETE', `/api/pages/${page.id}`, { expectedRevision: 1, mode: 'subtree', confirmedPageIds: [page.id] }, two)).statusCode, 404);
     const encodedPage = `/api/pages/%${page.id.charCodeAt(0).toString(16)}${page.id.slice(1)}`;
     assert.equal((await send('GET', encodedPage, undefined, one)).statusCode, 200);
     assert.equal((await send('GET', encodedPage, undefined, two)).statusCode, 404);

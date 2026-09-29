@@ -7,7 +7,7 @@ import { checkDatabase, pool } from './db.js';
 import { assetContents } from './store.js';
 import { checkObjectStore } from './object-store.js';
 import { authMode, clearCookie, cookie, currentUser, ownsAsset, ownsPage, ownsProject, sessionToken, signIn, signOut } from './auth.js';
-import { createAsset, createPage, createProject, deleteProject, drainAssetObjectDeletions, getAsset, getPage, getProject, getRevision, listAssets, listPages, listProjects, listRevisions, migrate, projectExportAssets, projectExportData, restorePage, savePage, updateProject, validDocument } from './store.js';
+import { createAsset, createPage, createProject, deletePage, deleteProject, drainAssetObjectDeletions, getAsset, getPage, getProject, getRevision, listAssets, listPages, listProjects, listRevisions, migrate, movePage, projectExportAssets, projectExportData, restorePage, savePage, updateProject, validDocument } from './store.js';
 
 export const app = Fastify({ logger: process.env.NODE_ENV !== 'test', bodyLimit: 2 * 1024 * 1024, requestTimeout: 30000, trustProxy: process.env.TRUST_PROXY === 'true' });
 const missing = (reply, kind) => reply.code(404).send({ error: `${kind} not found` });
@@ -30,7 +30,8 @@ const imageTypes = {
 app.setErrorHandler((error, request, reply) => {
   const status = error.statusCode || (error.code === '23503' ? 404 : error.code === '23505' ? 409 : 500);
   if (status >= 500) request.log.error(error);
-  reply.code(status).send({ error: status >= 500 ? 'Internal server error' : error.code === '23505' ? 'Page path already exists in this project' : error.message });
+  const uniqueMessage = error.constraint?.includes('slug') ? 'Sibling slug already exists' : error.constraint?.includes('order') ? 'Sibling order changed; reload and try again' : 'Page path already exists in this project';
+  reply.code(status).send({ error: status >= 500 ? 'Internal server error' : error.code === '23505' ? uniqueMessage : error.message });
 });
 const rateBuckets = new Map();
 app.addHook('onRequest', async (request, reply) => {
@@ -110,17 +111,40 @@ app.get('/api/projects/:projectId/pages', async (request, reply) => {
 app.post('/api/projects/:projectId/pages', async (request, reply) => {
   const id = uuid(request.params.projectId);
   if (!await getProject(id)) return missing(reply, 'Project');
-  return reply.code(201).send({ page: await createPage(id, request.body?.name, request.body?.document, request.body?.path) });
+  const parentPageId = request.body?.parentPageId === undefined ? null : request.body.parentPageId === null ? null : uuid(request.body.parentPageId);
+  return reply.code(201).send({ page: await createPage(id, request.body?.name, request.body?.document, request.body?.path, parentPageId, request.body?.slug) });
 });
 app.get('/api/pages/:pageId', async (request, reply) => {
   const page = await getPage(uuid(request.params.pageId));
   return page ? { page } : missing(reply, 'Page');
 });
 app.put('/api/pages/:pageId', async (request, reply) => {
-  const result = await savePage(uuid(request.params.pageId), request.body?.expectedRevision, request.body?.document, request.body?.name, request.body?.path);
+  const result = await savePage(uuid(request.params.pageId), request.body?.expectedRevision, request.body?.document, request.body?.name, request.body?.path, request.body?.slug);
   if (result.page) return { page: result.page };
   if (!result.current) return missing(reply, 'Page');
   return reply.code(409).send({ error: 'Page revision conflict', currentRevision: result.current.revision });
+});
+app.patch('/api/pages/:pageId', async (request, reply) => {
+  if (!['name', 'slug', 'path'].some(key => Object.hasOwn(request.body || {}, key))) return reply.code(400).send({ error: 'Provide name, slug, or path' });
+  const result = await savePage(uuid(request.params.pageId), request.body?.expectedRevision, undefined, request.body?.name, request.body?.path, request.body?.slug);
+  if (result.page) return { page: result.page };
+  if (!result.current) return missing(reply, 'Page');
+  return reply.code(409).send({ error: 'Page revision conflict', currentRevision: result.current.revision });
+});
+app.post('/api/pages/:pageId/move', async (request, reply) => {
+  const parentPageId = request.body?.parentPageId === undefined ? undefined : request.body.parentPageId === null ? null : uuid(request.body.parentPageId);
+  const result = await movePage(uuid(request.params.pageId), request.body?.expectedRevision, parentPageId, request.body?.index);
+  if (result.missing) return missing(reply, 'Page');
+  if (result.conflict) return reply.code(409).send({ error: 'Page revision conflict' });
+  return { page: result.page };
+});
+app.delete('/api/pages/:pageId', async (request, reply) => {
+  const destination = request.body?.destinationParentPageId === undefined ? undefined : request.body.destinationParentPageId === null ? null : uuid(request.body.destinationParentPageId);
+  const result = await deletePage(uuid(request.params.pageId), request.body?.expectedRevision, request.body?.mode, destination, request.body?.confirmedPageIds);
+  if (result.missing) return missing(reply, 'Page');
+  if (result.conflict) return reply.code(409).send({ error: 'Page revision conflict' });
+  if (result.references) return reply.code(409).send({ error: 'Other pages link to a page selected for deletion', references: result.references });
+  return result;
 });
 app.get('/api/pages/:pageId/revisions', async (request, reply) => {
   const id = uuid(request.params.pageId);

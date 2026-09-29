@@ -5,7 +5,7 @@ import { normalizePagePath, samplePage, validateDocument } from '@builder/docume
 import { pool } from './db.js';
 import { assetBucket, assetStorageMode, deleteObject, getObject, putObject } from './object-store.js';
 
-const migrations = ['001_baseline', '002_accounts_storage', '003_asset_bucket', '004_project_management'].map((name, index) => ({ version: index + 1, path: fileURLToPath(new URL(`./migrations/${name}.sql`, import.meta.url)) }));
+const migrations = ['001_baseline', '002_accounts_storage', '003_asset_bucket', '004_project_management', '005_page_hierarchy'].map((name, index) => ({ version: index + 1, path: fileURLToPath(new URL(`./migrations/${name}.sql`, import.meta.url)) }));
 export const assetUrl = id => `/api/assets/${id}/content`;
 
 export const sampleProjectId = '00000000-0000-4000-8000-000000000001';
@@ -29,7 +29,7 @@ export async function migrate() {
     }
     if (process.env.NODE_ENV !== 'production') {
       await client.query('INSERT INTO projects(id,name) VALUES($1,$2) ON CONFLICT(id) DO NOTHING', [sampleProjectId, 'Sample project']);
-      await client.query('INSERT INTO pages(id,project_id,name,path,document) VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT(id) DO NOTHING', [samplePageId, sampleProjectId, 'Sample page', '/', JSON.stringify(samplePage)]);
+      await client.query('INSERT INTO pages(id,project_id,name,path,document,slug,sort_order) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7) ON CONFLICT(id) DO NOTHING', [samplePageId, sampleProjectId, 'Sample page', '/', JSON.stringify(samplePage), 'home', 0]);
       await client.query('INSERT INTO page_revisions(page_id,revision,document) VALUES($1,1,$2::jsonb) ON CONFLICT(page_id,revision) DO NOTHING', [samplePageId, JSON.stringify(samplePage)]);
     }
   } finally {
@@ -54,7 +54,7 @@ function validPath(value) {
 
 const projectColumns = 'p.id, p.name, p.version, p.created_at AS "createdAt", p.updated_at AS "updatedAt", GREATEST(p.updated_at, COALESCE(pg.last_updated, p.updated_at), COALESCE(a.last_updated, p.updated_at)) AS "lastUpdatedAt", COALESCE(pg.page_count, 0)::integer AS "pageCount", COALESCE(pg.revision_count, 0)::integer AS "revisionCount", COALESCE(a.asset_count, 0)::integer AS "assetCount"';
 const projectFrom = `FROM projects p LEFT JOIN LATERAL (SELECT COUNT(*) AS page_count, MAX(updated_at) AS last_updated, (SELECT COUNT(*) FROM page_revisions pr JOIN pages rp ON rp.id=pr.page_id WHERE rp.project_id=p.id) AS revision_count FROM pages WHERE project_id=p.id) pg ON true LEFT JOIN LATERAL (SELECT COUNT(*) AS asset_count, MAX(created_at) AS last_updated FROM assets WHERE project_id=p.id) a ON true`;
-const pageColumns = 'id, project_id AS "projectId", name, path, document, revision, created_at AS "createdAt", updated_at AS "updatedAt"';
+const pageColumns = 'id, project_id AS "projectId", parent_page_id AS "parentPageId", slug, sort_order AS "sortOrder", name, path, document, revision, created_at AS "createdAt", updated_at AS "updatedAt"';
 const assetColumns = 'id, project_id AS "projectId", filename, media_type AS "mediaType", byte_length AS "byteLength", sha256, created_at AS "createdAt"';
 
 export async function listProjects(ownerId = null) { return (await pool.query(`SELECT ${projectColumns} ${projectFrom} WHERE ($1::uuid IS NULL OR p.owner_id=$1) ORDER BY p.created_at, p.id`, [ownerId])).rows; }
@@ -107,41 +107,226 @@ export async function drainAssetObjectDeletions() {
   return jobs.length;
 }
 
+const slugPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const badRequest = message => Object.assign(new Error(message), { statusCode: 400 });
+const conflict = message => Object.assign(new Error(message), { statusCode: 409 });
+function validSlug(value) {
+  if (typeof value !== 'string' || value.length > 120 || !slugPattern.test(value)) throw badRequest('Slug must use lowercase letters, numbers, and single hyphens');
+  return value;
+}
+const slugFromPath = path => path === '/' ? 'home' : path.slice(path.lastIndexOf('/') + 1).replace(/-+/g, '-').replace(/^-|-$/g, '') || 'page';
+const pageMetadataColumns = 'id, project_id AS "projectId", parent_page_id AS "parentPageId", slug, sort_order AS "sortOrder", name, path, revision, created_at AS "createdAt", updated_at AS "updatedAt"';
 export async function listPages(projectId) {
-  return (await pool.query('SELECT id, project_id AS "projectId", name, path, revision, created_at AS "createdAt", updated_at AS "updatedAt" FROM pages WHERE project_id=$1 ORDER BY created_at, id', [projectId])).rows;
+  const rows = (await pool.query(`SELECT ${pageMetadataColumns} FROM pages WHERE project_id=$1 ORDER BY sort_order,id`, [projectId])).rows;
+  const children = new Map();
+  for (const row of rows) { const key = row.parentPageId || ''; if (!children.has(key)) children.set(key, []); children.get(key).push(row); }
+  const result = [];
+  const visit = (parentId, level) => { for (const row of children.get(parentId || '') || []) { result.push({ ...row, level }); visit(row.id, level + 1); } };
+  visit(null, 0);
+  if (result.length !== rows.length) throw new Error('Page hierarchy has a cycle or missing parent');
+  return result;
 }
 export async function getPage(id) { return (await pool.query(`SELECT ${pageColumns} FROM pages WHERE id=$1`, [id])).rows[0] || null; }
 
-export async function createPage(projectId, name, document, path = '/') {
+export async function createPage(projectId, name, document, path, parentPageId = null, slug) {
   const pageName = validName(name, 'Page name');
-  const pagePath = validPath(path);
   const pageDocument = validDocument(document);
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const result = await client.query(`INSERT INTO pages(id,project_id,name,path,document) VALUES($1,$2,$3,$4,$5::jsonb) RETURNING ${pageColumns}`, [randomUUID(), projectId, pageName, pagePath, JSON.stringify(pageDocument)]);
+    if (!(await client.query('SELECT id FROM projects WHERE id=$1 FOR UPDATE', [projectId])).rowCount) throw Object.assign(new Error('Project not found'), { statusCode: 404 });
+    const parent = parentPageId === null ? null : (await client.query('SELECT id,path FROM pages WHERE id=$1 AND project_id=$2', [parentPageId, projectId])).rows[0];
+    if (parentPageId !== null && !parent) throw badRequest('Parent page must be in this project');
+    const defaultSlug = path === undefined ? pageName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'page' : slugFromPath(validPath(path));
+    const pageSlug = validSlug(slug === undefined ? defaultSlug : slug);
+    const pagePath = validPath(path === undefined ? parent ? `${parent.path === '/' ? '' : parent.path}/${pageSlug}` : (await client.query('SELECT 1 FROM pages WHERE project_id=$1 AND path=\'/\'', [projectId])).rowCount ? `/${pageSlug}` : '/' : path);
+    const nextOrder = (await client.query('SELECT COALESCE(MAX(sort_order)+1,0) AS value FROM pages WHERE project_id=$1 AND parent_page_id IS NOT DISTINCT FROM $2::uuid', [projectId, parentPageId])).rows[0].value;
+    const result = await client.query(`INSERT INTO pages(id,project_id,parent_page_id,slug,sort_order,name,path,document) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb) RETURNING ${pageColumns}`, [randomUUID(), projectId, parentPageId, pageSlug, nextOrder, pageName, pagePath, JSON.stringify(pageDocument)]);
     const page = result.rows[0];
     await client.query('INSERT INTO page_revisions(page_id,revision,document) VALUES($1,1,$2::jsonb)', [page.id, JSON.stringify(pageDocument)]);
+    await client.query('UPDATE projects SET version=version+1,updated_at=now() WHERE id=$1', [projectId]);
     await client.query('COMMIT');
     return page;
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { client.release(); }
 }
 
-export async function savePage(id, expectedRevision, document, name, path) {
-  const pageDocument = validDocument(document);
+function visitDocumentNodes(document, visit) {
+  const node = value => { visit(value); value.children?.forEach(node); };
+  for (const region of ['header', 'main', 'footer']) document.regions[region].forEach(node);
+}
+function internalPath(href) {
+  if (typeof href !== 'string' || !href.startsWith('/') || href.startsWith('//')) return null;
+  return href.split(/[?#]/, 1)[0];
+}
+function rewriteDocumentLinks(document, oldPath, newPath) {
+  const copy = structuredClone(document);
+  let changed = 0;
+  visitDocumentNodes(copy, node => {
+    if (!['Button', 'Link', 'Floating Action Button'].includes(node.type) || (node.type === 'Floating Action Button' && node.props.action !== 'link')) return;
+    const href = node.props.href;
+    if (internalPath(href) !== oldPath) return;
+    node.props.href = newPath + href.slice(oldPath.length);
+    changed++;
+  });
+  return { document: copy, changed };
+}
+async function rewriteOtherPages(client, projectId, excludedPageId, oldPath, newPath) {
+  const rows = (await client.query('SELECT id,document FROM pages WHERE project_id=$1 AND id<>$2 ORDER BY id FOR UPDATE', [projectId, excludedPageId])).rows;
+  for (const row of rows) {
+    const next = rewriteDocumentLinks(row.document, oldPath, newPath);
+    if (!next.changed) continue;
+    validDocument(next.document);
+    const updated = (await client.query('UPDATE pages SET document=$2::jsonb,revision=revision+1,updated_at=now() WHERE id=$1 RETURNING revision', [row.id, JSON.stringify(next.document)])).rows[0];
+    await client.query('INSERT INTO page_revisions(page_id,revision,document) VALUES($1,$2,$3::jsonb)', [row.id, updated.revision, JSON.stringify(next.document)]);
+  }
+}
+
+export async function savePage(id, expectedRevision, document, name, path, slug, requireValidLinks = false) {
   if (!Number.isInteger(expectedRevision) || expectedRevision < 1) throw Object.assign(new Error('expectedRevision must be a positive integer'), { statusCode: 400 });
   const pageName = name === undefined ? undefined : validName(name, 'Page name');
   const pagePath = path === undefined ? undefined : validPath(path);
+  const pageSlug = slug === undefined ? undefined : validSlug(slug);
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const result = await client.query(`UPDATE pages SET document=$3::jsonb, name=COALESCE($4,name), path=COALESCE($5,path), revision=revision+1, updated_at=now() WHERE id=$1 AND revision=$2 RETURNING ${pageColumns}`, [id, expectedRevision, JSON.stringify(pageDocument), pageName ?? null, pagePath ?? null]);
-    if (!result.rowCount) { await client.query('ROLLBACK'); return { page: null, current: await getPage(id) }; }
+    const identity = (await client.query('SELECT project_id FROM pages WHERE id=$1', [id])).rows[0];
+    if (!identity) { await client.query('ROLLBACK'); return { page: null, current: null }; }
+    await client.query('SELECT id FROM projects WHERE id=$1 FOR UPDATE', [identity.project_id]);
+    const current = (await client.query(`SELECT ${pageColumns} FROM pages WHERE id=$1 FOR UPDATE`, [id])).rows[0];
+    if (!current || current.revision !== expectedRevision) { await client.query('ROLLBACK'); return { page: null, current }; }
+    let pageDocument = validDocument(document === undefined ? current.document : document);
+    const nextPath = pagePath ?? current.path;
+    if (nextPath !== current.path) pageDocument = validDocument(rewriteDocumentLinks(pageDocument, current.path, nextPath).document);
+    if (requireValidLinks) {
+      const paths = new Set((await client.query('SELECT path FROM pages WHERE project_id=$1', [current.projectId])).rows.map(row => row.path));
+      paths.add(nextPath);
+      const missing = new Set();
+      visitDocumentNodes(pageDocument, node => {
+        if (!['Button', 'Link', 'Floating Action Button'].includes(node.type) || (node.type === 'Floating Action Button' && node.props.action !== 'link')) return;
+        const route = internalPath(node.props.href);
+        if (route && !paths.has(route)) missing.add(route);
+      });
+      if (missing.size) throw conflict(`Restored document links to missing page paths: ${[...missing].join(', ')}`);
+    }
+    const result = await client.query(`UPDATE pages SET document=$2::jsonb, name=COALESCE($3,name), path=$4, slug=COALESCE($5,slug), revision=revision+1, updated_at=now() WHERE id=$1 RETURNING ${pageColumns}`, [id, JSON.stringify(pageDocument), pageName ?? null, nextPath, pageSlug ?? null]);
     const page = result.rows[0];
     await client.query('INSERT INTO page_revisions(page_id,revision,document) VALUES($1,$2,$3::jsonb)', [id, page.revision, JSON.stringify(pageDocument)]);
+    if (nextPath !== current.path) await rewriteOtherPages(client, current.projectId, id, current.path, nextPath);
+    await client.query('UPDATE projects SET version=version+1,updated_at=now() WHERE id=$1', [current.projectId]);
     await client.query('COMMIT');
     return { page };
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
+}
+
+async function lockedHierarchy(client, pageId) {
+  const identity = (await client.query('SELECT project_id FROM pages WHERE id=$1', [pageId])).rows[0];
+  if (!identity) return null;
+  await client.query('SELECT id FROM projects WHERE id=$1 FOR UPDATE', [identity.project_id]);
+  const rows = (await client.query('SELECT id,project_id AS "projectId",parent_page_id AS "parentPageId",slug,sort_order AS "sortOrder",revision,document,path FROM pages WHERE project_id=$1 ORDER BY id FOR UPDATE', [identity.project_id])).rows;
+  return { projectId: identity.project_id, rows, target: rows.find(row => row.id === pageId) };
+}
+const parentKey = id => id || '';
+function siblingGroups(rows) {
+  const groups = new Map();
+  for (const row of rows) { const key = parentKey(row.parentPageId); if (!groups.has(key)) groups.set(key, []); groups.get(key).push(row); }
+  for (const items of groups.values()) items.sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id));
+  return groups;
+}
+async function writeSiblingOrder(client, rows, groups, parentChanges = new Map()) {
+  for (const [index, row] of rows.entries()) await client.query('UPDATE pages SET sort_order=$2 WHERE id=$1', [row.id, -index - 1]);
+  for (const [id, parentId] of parentChanges) await client.query('UPDATE pages SET parent_page_id=$2 WHERE id=$1', [id, parentId]);
+  for (const items of groups.values()) for (const [index, row] of items.entries()) await client.query('UPDATE pages SET sort_order=$2 WHERE id=$1', [row.id, index]);
+}
+async function bumpPageRevision(client, row) {
+  const updated = (await client.query('UPDATE pages SET revision=revision+1,updated_at=now() WHERE id=$1 RETURNING revision', [row.id])).rows[0];
+  await client.query('INSERT INTO page_revisions(page_id,revision,document) VALUES($1,$2,$3::jsonb)', [row.id, updated.revision, JSON.stringify(row.document)]);
+}
+function descendantIds(rows, id) {
+  const children = new Map();
+  for (const row of rows) { const key = parentKey(row.parentPageId); if (!children.has(key)) children.set(key, []); children.get(key).push(row.id); }
+  const found = new Set();
+  const visit = current => { if (found.has(current)) throw conflict('Page hierarchy contains a cycle'); found.add(current); for (const child of children.get(current) || []) visit(child); };
+  visit(id);
+  return found;
+}
+
+export async function movePage(id, expectedRevision, parentPageId, index) {
+  if (!Number.isInteger(expectedRevision) || expectedRevision < 1 || !Number.isInteger(index) || index < 0 || parentPageId === undefined) throw badRequest('expectedRevision, parentPageId, and a nonnegative index are required');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const state = await lockedHierarchy(client, id);
+    if (!state) { await client.query('ROLLBACK'); return { missing: true }; }
+    const { rows, target, projectId } = state;
+    if (target.revision !== expectedRevision) { await client.query('ROLLBACK'); return { conflict: true }; }
+    if (parentPageId !== null && !rows.some(row => row.id === parentPageId)) throw badRequest('Parent page must be in this project');
+    if (descendantIds(rows, id).has(parentPageId)) throw badRequest('A page cannot move under itself or a descendant');
+    const groups = siblingGroups(rows);
+    const old = groups.get(parentKey(target.parentPageId));
+    old.splice(old.findIndex(row => row.id === id), 1);
+    const destination = groups.get(parentKey(parentPageId)) || [];
+    if (index > destination.length) throw badRequest('Index exceeds the destination sibling count');
+    if (destination.some(row => row.slug === target.slug)) throw conflict('Sibling slug already exists under that parent');
+    destination.splice(index, 0, target);
+    groups.set(parentKey(parentPageId), destination);
+    await writeSiblingOrder(client, rows, groups, new Map([[id, parentPageId]]));
+    await bumpPageRevision(client, target);
+    await client.query('UPDATE projects SET version=version+1,updated_at=now() WHERE id=$1', [projectId]);
+    await client.query('COMMIT');
+    return { page: await getPage(id) };
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
+}
+
+export async function deletePage(id, expectedRevision, mode, destinationParentPageId, confirmedPageIds) {
+  if (!Number.isInteger(expectedRevision) || expectedRevision < 1 || !['subtree', 'reparent'].includes(mode) || !Array.isArray(confirmedPageIds)) throw badRequest('expectedRevision, deletion mode, and confirmedPageIds are required');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const state = await lockedHierarchy(client, id);
+    if (!state) { await client.query('ROLLBACK'); return { missing: true }; }
+    const { rows, target, projectId } = state;
+    if (target.revision !== expectedRevision) { await client.query('ROLLBACK'); return { conflict: true }; }
+    const subtree = descendantIds(rows, id);
+    const removed = mode === 'subtree' ? subtree : new Set([id]);
+    if (confirmedPageIds.length !== removed.size || new Set(confirmedPageIds).size !== removed.size || confirmedPageIds.some(value => !removed.has(value))) throw conflict('The pages affected by deletion changed; review them again');
+    if (mode === 'reparent' && destinationParentPageId === undefined) throw badRequest('Select a destination parent, or null for root');
+    if (mode === 'reparent' && destinationParentPageId !== null && !rows.some(row => row.id === destinationParentPageId)) throw badRequest('Destination parent must be in this project');
+    if (mode === 'reparent' && subtree.has(destinationParentPageId)) throw badRequest('Destination parent cannot be inside the deleted page subtree');
+    const removedPaths = new Set(rows.filter(row => removed.has(row.id)).map(row => row.path));
+    const references = [];
+    for (const row of rows.filter(item => !removed.has(item.id))) visitDocumentNodes(row.document, node => {
+      if (!['Button', 'Link', 'Floating Action Button'].includes(node.type) || (node.type === 'Floating Action Button' && node.props.action !== 'link')) return;
+      if (removedPaths.has(internalPath(node.props.href))) references.push({ pageId: row.id, nodeId: node.id, href: node.props.href });
+    });
+    if (references.length) { await client.query('ROLLBACK'); return { references }; }
+    const parentChanges = new Map();
+    if (mode === 'reparent') {
+      const groups = siblingGroups(rows);
+      const children = groups.get(id) || [];
+      const destination = (groups.get(parentKey(destinationParentPageId)) || []).filter(row => row.id !== id);
+      for (const child of children) {
+        if (destination.some(row => row.slug === child.slug)) throw conflict(`Sibling slug ${child.slug} already exists at the destination`);
+        parentChanges.set(child.id, destinationParentPageId);
+      }
+    }
+    await client.query('DELETE FROM pages WHERE id=ANY($1::uuid[])', [[...removed]]);
+    const survivors = rows.filter(row => !removed.has(row.id));
+    const finalGroups = siblingGroups(survivors);
+    if (mode === 'reparent') {
+      const children = finalGroups.get(id) || [];
+      const key = parentKey(destinationParentPageId);
+      const atDestination = finalGroups.get(key) || [];
+      finalGroups.set(key, atDestination.concat(children));
+      finalGroups.delete(id);
+    }
+    await writeSiblingOrder(client, survivors, finalGroups, parentChanges);
+    for (const row of survivors.filter(item => parentChanges.has(item.id))) await bumpPageRevision(client, row);
+    await client.query('UPDATE projects SET version=version+1,updated_at=now() WHERE id=$1', [projectId]);
+    await client.query('COMMIT');
+    return { deletedPageIds: [...removed], reparentedPageIds: [...parentChanges.keys()] };
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { client.release(); }
 }
@@ -155,7 +340,7 @@ export async function getRevision(pageId, revision) {
 export async function restorePage(id, revision, expectedRevision) {
   const previous = await getRevision(id, revision);
   if (!previous) return { missingRevision: true };
-  return savePage(id, expectedRevision, previous.document);
+  return savePage(id, expectedRevision, previous.document, undefined, undefined, undefined, true);
 }
 
 export async function listAssets(projectId) {
