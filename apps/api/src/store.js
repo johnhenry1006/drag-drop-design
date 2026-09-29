@@ -3,9 +3,9 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { normalizePagePath, samplePage, validateDocument } from '@builder/document';
 import { pool } from './db.js';
-import { assetStorageMode, deleteObject, getObject, putObject } from './object-store.js';
+import { assetBucket, assetStorageMode, deleteObject, getObject, putObject } from './object-store.js';
 
-const migrations = [1, 2].map(number => ({ version: number, path: fileURLToPath(new URL(`./migrations/${String(number).padStart(3, '0')}_${number === 1 ? 'baseline' : 'accounts_storage'}.sql`, import.meta.url)) }));
+const migrations = ['001_baseline', '002_accounts_storage', '003_asset_bucket'].map((name, index) => ({ version: index + 1, path: fileURLToPath(new URL(`./migrations/${name}.sql`, import.meta.url)) }));
 export const assetUrl = id => `/api/assets/${id}/content`;
 
 export const sampleProjectId = '00000000-0000-4000-8000-000000000001';
@@ -122,27 +122,28 @@ export async function listAssets(projectId) {
 export async function createAsset(projectId, filename, mediaType, contents) {
   const id = randomUUID();
   const sha256 = createHash('sha256').update(contents).digest('hex');
-  const objectKey = assetStorageMode() === 's3' ? `projects/${projectId}/assets/${id}` : null;
-  if (objectKey) await putObject(objectKey, contents, mediaType);
+  const objectBucket = assetStorageMode() === 's3' ? assetBucket() : null;
+  const objectKey = objectBucket ? `assets/${randomUUID()}` : null;
+  if (objectKey) await putObject(objectKey, contents, mediaType, objectBucket);
   try {
-    const result = await pool.query(`INSERT INTO assets(id,project_id,filename,media_type,byte_length,sha256,contents,object_key) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING ${assetColumns}`, [id, projectId, filename, mediaType, contents.length, sha256, objectKey ? null : contents, objectKey]);
+    const result = await pool.query(`INSERT INTO assets(id,project_id,filename,media_type,byte_length,sha256,contents,object_key,object_bucket) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING ${assetColumns}`, [id, projectId, filename, mediaType, contents.length, sha256, objectKey ? null : contents, objectKey, objectBucket]);
     return { ...result.rows[0], url: assetUrl(id) };
   } catch (error) {
-    if (objectKey) await deleteObject(objectKey).catch(() => {});
+    if (objectKey) await deleteObject(objectKey, objectBucket).catch(() => {});
     throw error;
   }
 }
 export async function getAsset(id) {
-  return (await pool.query(`SELECT ${assetColumns}, contents, object_key AS "objectKey" FROM assets WHERE id=$1`, [id])).rows[0] || null;
+  return (await pool.query(`SELECT ${assetColumns}, contents, object_key AS "objectKey", object_bucket AS "objectBucket" FROM assets WHERE id=$1`, [id])).rows[0] || null;
 }
 export async function assetContents(asset) {
-  return asset.objectKey ? getObject(asset.objectKey) : asset.contents;
+  return asset.objectKey ? getObject(asset.objectKey, asset.objectBucket || assetBucket()) : asset.contents;
 }
 
 export async function projectExportData(projectId, includeContents = true) {
   const [pages, assets] = await Promise.all([
     pool.query('SELECT id, name, path, document FROM pages WHERE project_id=$1 ORDER BY path, id', [projectId]),
-    pool.query(`SELECT ${assetColumns}, contents, object_key AS "objectKey" FROM assets WHERE project_id=$1`, [projectId])
+    pool.query(`SELECT ${assetColumns}, contents, object_key AS "objectKey", object_bucket AS "objectBucket" FROM assets WHERE project_id=$1`, [projectId])
   ]);
   const totalBytes = assets.rows.reduce((sum, asset) => sum + asset.byteLength, 0);
   if (pages.rows.length > 100 || (includeContents && totalBytes > 100 * 1024 * 1024)) throw Object.assign(new Error('Export exceeds the page or asset size limit'), { statusCode: 413 });

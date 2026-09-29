@@ -8,12 +8,20 @@ Use Node.js 22.12+ and Docker with Compose. From the repository root:
 
 ```bash
 npm install
-docker compose up -d db
+docker compose up -d db s3-ninja
+cp apps/api/.env.example apps/api/.env.local
+# Fill the local S3 Ninja credentials shown at http://localhost:9444/ui
+set -a
+. apps/api/.env.local
+set +a
+node scripts/create-test-bucket.js
 npm run db:migrate -w @builder/api
 npm run dev
 ```
 
-Open http://127.0.0.1:5173. The API listens at http://127.0.0.1:3001. Check `http://127.0.0.1:3001/api/health/db` for the PostgreSQL connection. Docker maps PostgreSQL to localhost port 15432 to avoid conflicts with existing local servers. Override `DATABASE_URL` and `API_PORT` with environment variables if needed; `apps/api/.env.example` shows the defaults.
+Open http://127.0.0.1:5173. The API listens at http://127.0.0.1:3001. Check `http://127.0.0.1:3001/api/health/ready` for PostgreSQL and S3 readiness. Docker maps PostgreSQL to localhost port 15432. S3 Ninja's host endpoint and UI are at `http://localhost:9444`; another container in this Compose network uses `http://s3-ninja:9000`. Use the host endpoint in `.env.local` because `npm run dev` runs the API on the host. These emulator credentials stay server-side; the bucket and S3 Ninja UI/API are for local development, never a public production endpoint. The ignored `.env.local` holds your actual local values; `.env.example` has no keys.
+
+S3 Ninja writes to the named `builder_s3_data` volume. Upload an image, record its `/api/assets/{id}/content` URL, run `docker compose restart s3-ninja`, then reload the page or fetch that URL again to confirm identical bytes. A normal container restart preserves the volume; `docker compose down -v` removes named volumes and their data. If port 9444 is occupied, start Compose with `S3_NINJA_PORT=19444 docker compose up -d db s3-ninja` and set `S3_ENDPOINT=http://127.0.0.1:19444` in your ignored env file. If an API container joins this Compose network, give it `S3_ENDPOINT=http://s3-ninja:9000` instead. Do not run `assets:backfill` merely to start S3 Ninja: existing database assets remain readable without moving their bytes.
 
 ```bash
 npm test
@@ -27,7 +35,7 @@ npm run verify:exports
 
 `npm run verify:exports` requires the running editor and API. It creates a temporary two-page project, downloads and unzips HTML5, React JSX, and Vue ZIPs into ignored `generated/verification/`, builds and serves all three, compares content and computed spacing with Preview at desktop and mobile viewports, checks bundled image rendering and `/about` navigation, then removes its temporary database project.
 
-PostgreSQL stores projects, pages, immutable page revisions, account sessions, and asset metadata. Local development can store image bytes in PostgreSQL; production requires a private S3-compatible object store. Page documents are versioned JSONB and are validated with `@builder/document` before create, update, or restore. The API seeds a sample project and page once. Page saves use an expected revision and return HTTP 409 when another save has won; restoring an old revision creates a new current revision.
+PostgreSQL stores projects, pages, immutable page revisions, account sessions, and asset metadata. New local uploads use S3 Ninja when `ASSET_STORE=s3`; older database-byte assets remain readable and are not changed by this setup. PostgreSQL records the bucket, opaque object key, checksum, and other metadata for new objects. Production requires a private S3-compatible object store. Page documents are versioned JSONB and are validated with `@builder/document` before create, update, or restore. The API seeds a sample project and page once. Page saves use an expected revision and return HTTP 409 when another save has won; restoring an old revision creates a new current revision.
 
 The toolbar creates and opens projects and pages, marks unsaved changes, saves, reloads, and restores revisions. It remembers the last opened page in this browser. A conflicting save keeps local edits and offers **Save as copy**. An Image node's Content tab uploads validated PNG, JPEG, GIF, or WebP files up to 10 MB, or reuses an asset already in the project. Each upload gets a stable `/api/assets/{id}/content` URL; removing a node never deletes its asset. Asset bytes remain available to Preview after reload and restoration.
 

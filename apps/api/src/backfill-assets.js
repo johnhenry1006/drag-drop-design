@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { assetStorageMode, putObject } from './object-store.js';
+import { assetBucket, assetStorageMode, getObject, putObject } from './object-store.js';
 import { pool } from './db.js';
 
 if (assetStorageMode() !== 's3') throw new Error('Set ASSET_STORE=s3 before backfilling assets');
@@ -11,10 +11,12 @@ try {
     for (const asset of rows) {
       if (createHash('sha256').update(asset.contents).digest('hex') !== asset.sha256) throw new Error(`Asset checksum mismatch: ${asset.id}`);
       const key = `projects/${asset.project_id}/assets/${asset.id}`;
-      await putObject(key, asset.contents, asset.media_type);
-      await pool.query('UPDATE assets SET object_key=$2, contents=NULL WHERE id=$1 AND object_key IS NULL', [asset.id, key]);
+      const bucket = assetBucket();
+      await putObject(key, asset.contents, asset.media_type, bucket);
+      if (createHash('sha256').update(await getObject(key, bucket)).digest('hex') !== asset.sha256) throw new Error(`Object checksum mismatch: ${asset.id}`);
+      await pool.query('UPDATE assets SET object_key=$2, object_bucket=$3 WHERE id=$1 AND object_key IS NULL', [asset.id, key, bucket]);
       moved++;
     }
   }
-  console.log(`Backfilled ${moved} assets to object storage`);
+  console.log(`Copied ${moved} assets to object storage; original database bytes retained`);
 } finally { await pool.end(); }

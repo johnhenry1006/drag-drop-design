@@ -4,6 +4,7 @@ import { addNode, removeNode, samplePage, updateNode } from '@builder/document';
 import { app } from '../src/server.js';
 import { pool } from '../src/db.js';
 import { migrate } from '../src/store.js';
+import { headObject } from '../src/object-store.js';
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lqkAAAAASUVORK5CYII=', 'base64');
 const send = (method, url, payload) => app.inject({ method, url, payload, headers: { 'content-type': 'application/json' } });
@@ -45,9 +46,24 @@ test('JSONB pages, revisions, conflicts, restoration, and assets survive a reloa
     assert.equal(upload.statusCode, 201);
     const asset = upload.json().asset;
     assert.equal(asset.url, `/api/assets/${asset.id}/content`);
+    const stored = (await pool.query('SELECT contents, object_bucket, object_key FROM assets WHERE id=$1', [asset.id])).rows[0];
+    if (process.env.ASSET_STORE === 's3') {
+      assert.equal(stored.contents, null);
+      assert.equal(stored.object_bucket, process.env.S3_BUCKET);
+      assert.match(stored.object_key, /^assets\/[0-9a-f-]{36}$/);
+      assert.equal(stored.object_key.includes(asset.id), false);
+      assert.equal((await headObject(stored.object_key, stored.object_bucket)).ContentLength, png.length);
+    } else {
+      assert.deepEqual(stored.contents, png);
+      assert.equal(stored.object_key, null);
+    }
     const metadata = (await send('GET', `/api/assets/${asset.id}`)).json().asset;
     assert.equal(metadata.sha256, asset.sha256);
     assert.equal('contents' in metadata, false);
+    assert.equal('objectKey' in metadata, false);
+    assert.equal('objectBucket' in metadata, false);
+    const invalidUpload = await app.inject({ method: 'POST', url: `/api/projects/${projectId}/assets`, payload: Buffer.from('not an image'), headers: { 'content-type': 'image/png', 'x-file-name': 'invalid.png' } });
+    assert.equal(invalidUpload.statusCode, 400);
     const imageNode = { id: 'persist_image', type: 'Image', props: { src: asset.url, alt: 'Uploaded' }, styles: { desktop: {}, tablet: {}, mobile: {} } };
     const withImage = addNode(modified, nested.id, 0, imageNode);
     const withTwoImages = addNode(withImage, nested.id, 1, { ...imageNode, id: 'persist_image_reused' });

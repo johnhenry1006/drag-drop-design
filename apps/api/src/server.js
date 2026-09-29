@@ -157,7 +157,7 @@ app.get('/api/assets/:assetId', async (request, reply) => {
   const asset = await getAsset(uuid(request.params.assetId));
   if (!asset) return missing(reply, 'Asset');
   const metadata = { ...asset };
-  delete metadata.contents; delete metadata.objectKey;
+  delete metadata.contents; delete metadata.objectKey; delete metadata.objectBucket;
   return { asset: { ...metadata, url: `/api/assets/${asset.id}/content` } };
 });
 app.get('/api/assets/:assetId/content', async (request, reply) => {

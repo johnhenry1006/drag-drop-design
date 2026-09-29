@@ -41,6 +41,7 @@ test('authenticated S3-backed page flow builds HTML, React, and Vue exports', { 
     page.on('dialog', dialog => dialog.accept(answers.shift()));
     await page.getByRole('button', { name: 'New project' }).click();
     await page.locator('[data-save-state="saved"]').waitFor();
+    await page.waitForFunction(() => Boolean(document.querySelector('select[aria-label="Project"]')?.value));
     projectId = await page.getByRole('combobox', { name: 'Project' }).inputValue();
     const start = await documentFrom(page);
     assert.deepEqual(start.regions, { header: [], main: [], footer: [] });

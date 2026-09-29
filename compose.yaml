@@ -9,5 +9,12 @@ services:
       - "127.0.0.1:15432:5432"
     volumes:
       - builder_pg_data:/var/lib/postgresql/data
+  s3-ninja:
+    image: scireum/s3-ninja:latest
+    ports:
+      - "127.0.0.1:${S3_NINJA_PORT:-9444}:9000"
+    volumes:
+      - builder_s3_data:/home/sirius/data
 volumes:
   builder_pg_data:
+  builder_s3_data:
