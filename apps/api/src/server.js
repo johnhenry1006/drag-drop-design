@@ -1,11 +1,15 @@
 import Fastify from 'fastify';
 import { zipSync, strToU8 } from 'fflate';
+import { imageSize } from 'image-size';
 import { samplePage } from '@builder/document';
 import { analyzeProjectExport, buildProjectFiles } from '@builder/exporters/project';
 import { checkDatabase, pool } from './db.js';
+import { assetContents } from './store.js';
+import { checkObjectStore } from './object-store.js';
+import { authMode, clearCookie, cookie, currentUser, ownsAsset, ownsPage, ownsProject, sessionToken, signIn, signOut } from './auth.js';
 import { createAsset, createPage, createProject, getAsset, getPage, getProject, getRevision, listAssets, listPages, listProjects, listRevisions, migrate, projectExportData, restorePage, savePage, updateProject, validDocument } from './store.js';
 
-export const app = Fastify({ logger: process.env.NODE_ENV !== 'test' });
+export const app = Fastify({ logger: process.env.NODE_ENV !== 'test', bodyLimit: 2 * 1024 * 1024, requestTimeout: 30000, trustProxy: process.env.TRUST_PROXY === 'true' });
 const missing = (reply, kind) => reply.code(404).send({ error: `${kind} not found` });
 const uuid = value => {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) throw Object.assign(new Error('Invalid ID'), { statusCode: 400 });
@@ -28,14 +32,58 @@ app.setErrorHandler((error, request, reply) => {
   if (status >= 500) request.log.error(error);
   reply.code(status).send({ error: status >= 500 ? 'Internal server error' : error.code === '23505' ? 'Page path already exists in this project' : error.message });
 });
+const rateBuckets = new Map();
+app.addHook('onRequest', async (request, reply) => {
+  const path = new URL(request.url, 'http://localhost').pathname;
+  const origin = process.env.PUBLIC_ORIGIN;
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method) && origin && request.headers.origin !== origin) return reply.code(403).send({ error: 'Invalid request origin' });
+  const now = Date.now();
+  const key = `${request.ip}:${path === '/api/auth/login' ? 'login' : 'api'}`;
+  const limit = path === '/api/auth/login' ? 5 : 240;
+  const bucket = rateBuckets.get(key);
+  if (!bucket || now - bucket.start > 60000) rateBuckets.set(key, { start: now, count: 1 });
+  else if (++bucket.count > limit) return reply.code(429).header('Retry-After', '60').send({ error: 'Rate limit exceeded' });
+  if (rateBuckets.size > 10000) for (const [bucketKey, value] of rateBuckets) if (now - value.start > 60000) rateBuckets.delete(bucketKey);
+  if (authMode !== 'local' || path.startsWith('/api/health') || path === '/api/auth/login') return;
+  const user = await currentUser(sessionToken(request));
+  if (!user) return reply.code(401).send({ error: 'Sign in required' });
+  request.user = user;
+  const { projectId, pageId, assetId } = request.params || {};
+  if ((projectId && !await ownsProject(user.id, uuid(projectId))) || (pageId && !await ownsPage(user.id, uuid(pageId))) || (assetId && !await ownsAsset(user.id, uuid(assetId)))) return reply.code(404).send({ error: 'Resource not found' });
+});
+app.addHook('onSend', async (request, reply, payload) => {
+  reply.header('X-Content-Type-Options', 'nosniff');
+  reply.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+  reply.header('X-Frame-Options', 'DENY');
+  reply.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  reply.header('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
+  reply.header('Cache-Control', reply.getHeader('Cache-Control') || 'no-store');
+  if (process.env.NODE_ENV === 'production') reply.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  return payload;
+});
 app.addContentTypeParser(/^image\/(png|jpeg|gif|webp)$/, { parseAs: 'buffer', bodyLimit: 10 * 1024 * 1024 }, (request, body, done) => done(null, body));
 
 app.get('/api/health', async () => ({ ok: true }));
+app.get('/api/health/ready', async (request, reply) => {
+  try { await Promise.all([checkDatabase(), checkObjectStore()]); return { ok: true }; }
+  catch (error) { request.log.error(error); return reply.code(503).send({ ok: false }); }
+});
+app.get('/api/auth/me', async request => ({ enabled: authMode === 'local', user: request.user || null }));
+app.post('/api/auth/login', async (request, reply) => {
+  if (authMode !== 'local') return reply.code(404).send({ error: 'Sign in is disabled' });
+  const result = await signIn(request.body?.email, request.body?.password);
+  if (!result) return reply.code(401).send({ error: 'Invalid credentials' });
+  return reply.header('Set-Cookie', cookie(result.token)).send({ enabled: true, user: result.user });
+});
+app.post('/api/auth/logout', async (request, reply) => {
+  await signOut(sessionToken(request));
+  return reply.header('Set-Cookie', clearCookie()).send({ ok: true });
+});
 app.get('/api/health/db', async () => ({ ok: await checkDatabase() }));
 app.get('/api/sample-page', async () => validDocument(samplePage));
 
-app.get('/api/projects', async () => ({ projects: await listProjects() }));
-app.post('/api/projects', async (request, reply) => reply.code(201).send({ project: await createProject(request.body?.name) }));
+app.get('/api/projects', async request => ({ projects: await listProjects(request.user?.id || null) }));
+app.post('/api/projects', async (request, reply) => reply.code(201).send({ project: await createProject(request.body?.name, request.user?.id || null) }));
 app.get('/api/projects/:projectId', async (request, reply) => {
   const project = await getProject(uuid(request.params.projectId));
   return project ? { project } : missing(reply, 'Project');
@@ -94,28 +142,34 @@ app.post('/api/projects/:projectId/assets', { bodyLimit: 10 * 1024 * 1024 }, asy
   if (!imageTypes[mediaType] || !Buffer.isBuffer(contents) || !contents.length || !imageTypes[mediaType](contents)) {
     return reply.code(400).send({ error: 'Upload a valid PNG, JPEG, GIF, or WebP image' });
   }
+  try {
+    const dimensions = imageSize(contents);
+    const expected = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' }[mediaType];
+    if (dimensions.type !== expected || !dimensions.width || !dimensions.height || dimensions.width > 8192 || dimensions.height > 8192 || dimensions.width * dimensions.height > 32000000) throw new Error('Invalid dimensions');
+  } catch { return reply.code(400).send({ error: 'Image is malformed or exceeds 8192 pixels per side / 32 megapixels' }); }
   let filename;
   try { filename = decodeURIComponent(String(request.headers['x-file-name'] || 'image')); }
   catch { return reply.code(400).send({ error: 'Invalid image filename' }); }
-  if (!filename || filename.length > 255 || /[/\\\x00-\x1f]/.test(filename)) return reply.code(400).send({ error: 'Invalid image filename' });
+  if (!filename || filename.length > 255 || filename.split('').some(character => character === '/' || character === '\\' || character.charCodeAt(0) < 32)) return reply.code(400).send({ error: 'Invalid image filename' });
   return reply.code(201).send({ asset: await createAsset(id, filename, mediaType, contents) });
 });
 app.get('/api/assets/:assetId', async (request, reply) => {
   const asset = await getAsset(uuid(request.params.assetId));
   if (!asset) return missing(reply, 'Asset');
-  const { contents, ...metadata } = asset;
+  const metadata = { ...asset };
+  delete metadata.contents; delete metadata.objectKey;
   return { asset: { ...metadata, url: `/api/assets/${asset.id}/content` } };
 });
 app.get('/api/assets/:assetId/content', async (request, reply) => {
   const asset = await getAsset(uuid(request.params.assetId));
   if (!asset) return missing(reply, 'Asset');
-  return reply.header('Cache-Control', 'public, max-age=31536000, immutable').type(asset.mediaType).send(asset.contents);
+  return reply.header('Cache-Control', 'private, max-age=31536000, immutable').type(asset.mediaType).send(await assetContents(asset));
 });
 
 app.get('/api/projects/:projectId/exports/:target/check', async (request, reply) => {
   const id = uuid(request.params.projectId);
   if (!await getProject(id)) return missing(reply, 'Project');
-  const { pages, assets } = await projectExportData(id);
+  const { pages, assets } = await projectExportData(id, false);
   return { target: request.params.target, pages: pages.map(page => ({ id: page.id, name: page.name, path: page.path })), issues: analyzeProjectExport(request.params.target, pages, assets) };
 });
 app.get('/api/projects/:projectId/exports/:target.zip', async (request, reply) => {
@@ -133,10 +187,15 @@ app.get('/api/projects/:projectId/exports/:target.zip', async (request, reply) =
 
 if (process.env.NODE_ENV !== 'test') {
   try {
+    if (process.env.NODE_ENV === 'production') {
+      if (process.env.ASSET_STORE !== 's3') throw new Error('Production requires ASSET_STORE=s3');
+      if (!process.env.PUBLIC_ORIGIN || new URL(process.env.PUBLIC_ORIGIN).protocol !== 'https:') throw new Error('Production requires an HTTPS PUBLIC_ORIGIN');
+    }
     await migrate();
-    await app.listen({ port: Number(process.env.API_PORT || 3001), host: '127.0.0.1' });
+    await app.listen({ port: Number(process.env.API_PORT || 3001), host: process.env.API_HOST || (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1') });
   } catch (error) {
     app.log.error(error);
+    await app.close(); await pool.end();
     process.exitCode = 1;
   }
 }

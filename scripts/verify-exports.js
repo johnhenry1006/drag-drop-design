@@ -26,7 +26,7 @@ const run = (command, args, cwd) => {
 };
 async function ready(url) {
   for (let attempt = 0; attempt < 50; attempt++) {
-    try { if ((await fetch(url)).ok) return; } catch {}
+    try { if ((await fetch(url)).ok) return; } catch { /* retry until ready */ }
     await new Promise(resolve => setTimeout(resolve, 200));
   }
   throw new Error(`Server did not start: ${url}`);

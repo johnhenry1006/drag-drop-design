@@ -3,8 +3,9 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { normalizePagePath, samplePage, validateDocument } from '@builder/document';
 import { pool } from './db.js';
+import { assetStorageMode, deleteObject, getObject, putObject } from './object-store.js';
 
-const schema = fileURLToPath(new URL('./schema.sql', import.meta.url));
+const migrations = [1, 2].map(number => ({ version: number, path: fileURLToPath(new URL(`./migrations/${String(number).padStart(3, '0')}_${number === 1 ? 'baseline' : 'accounts_storage'}.sql`, import.meta.url)) }));
 export const assetUrl = id => `/api/assets/${id}/content`;
 
 export const sampleProjectId = '00000000-0000-4000-8000-000000000001';
@@ -13,15 +14,28 @@ export const samplePageId = '00000000-0000-4000-8000-000000000002';
 export async function migrate() {
   const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-    await client.query('SELECT pg_advisory_xact_lock(83140721)');
-    await client.query(await readFile(schema, 'utf8'));
-    await client.query('INSERT INTO projects(id,name) VALUES($1,$2) ON CONFLICT(id) DO NOTHING', [sampleProjectId, 'Sample project']);
-    await client.query('INSERT INTO pages(id,project_id,name,path,document) VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT(id) DO NOTHING', [samplePageId, sampleProjectId, 'Sample page', '/', JSON.stringify(samplePage)]);
-    await client.query('INSERT INTO page_revisions(page_id,revision,document) VALUES($1,1,$2::jsonb) ON CONFLICT(page_id,revision) DO NOTHING', [samplePageId, JSON.stringify(samplePage)]);
-    await client.query('COMMIT');
-  } catch (error) { await client.query('ROLLBACK'); throw error; }
-  finally { client.release(); }
+    await client.query('SELECT pg_advisory_lock(83140721)');
+    await client.query('CREATE TABLE IF NOT EXISTS schema_migrations (version integer PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())');
+    const latest = (await client.query('SELECT max(version) AS version FROM schema_migrations')).rows[0].version;
+    if (latest > migrations.at(-1).version) throw new Error(`Database schema version ${latest} is newer than this API`);
+    for (const migration of migrations) {
+      if ((await client.query('SELECT 1 FROM schema_migrations WHERE version=$1', [migration.version])).rowCount) continue;
+      await client.query('BEGIN');
+      try {
+        await client.query(await readFile(migration.path, 'utf8'));
+        await client.query('INSERT INTO schema_migrations(version) VALUES($1)', [migration.version]);
+        await client.query('COMMIT');
+      } catch (error) { await client.query('ROLLBACK'); throw error; }
+    }
+    if (process.env.NODE_ENV !== 'production') {
+      await client.query('INSERT INTO projects(id,name) VALUES($1,$2) ON CONFLICT(id) DO NOTHING', [sampleProjectId, 'Sample project']);
+      await client.query('INSERT INTO pages(id,project_id,name,path,document) VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT(id) DO NOTHING', [samplePageId, sampleProjectId, 'Sample page', '/', JSON.stringify(samplePage)]);
+      await client.query('INSERT INTO page_revisions(page_id,revision,document) VALUES($1,1,$2::jsonb) ON CONFLICT(page_id,revision) DO NOTHING', [samplePageId, JSON.stringify(samplePage)]);
+    }
+  } finally {
+    await client.query('SELECT pg_advisory_unlock(83140721)');
+    client.release();
+  }
 }
 
 export function validName(value, label = 'Name') {
@@ -42,10 +56,10 @@ const projectColumns = 'id, name, created_at AS "createdAt", updated_at AS "upda
 const pageColumns = 'id, project_id AS "projectId", name, path, document, revision, created_at AS "createdAt", updated_at AS "updatedAt"';
 const assetColumns = 'id, project_id AS "projectId", filename, media_type AS "mediaType", byte_length AS "byteLength", sha256, created_at AS "createdAt"';
 
-export async function listProjects() { return (await pool.query(`SELECT ${projectColumns} FROM projects ORDER BY created_at, id`)).rows; }
+export async function listProjects(ownerId = null) { return (await pool.query(`SELECT ${projectColumns} FROM projects WHERE ($1::uuid IS NULL OR owner_id=$1) ORDER BY created_at, id`, [ownerId])).rows; }
 export async function getProject(id) { return (await pool.query(`SELECT ${projectColumns} FROM projects WHERE id=$1`, [id])).rows[0] || null; }
-export async function createProject(name) {
-  return (await pool.query(`INSERT INTO projects(id,name) VALUES($1,$2) RETURNING ${projectColumns}`, [randomUUID(), validName(name, 'Project name')])).rows[0];
+export async function createProject(name, ownerId = null) {
+  return (await pool.query(`INSERT INTO projects(id,name,owner_id) VALUES($1,$2,$3) RETURNING ${projectColumns}`, [randomUUID(), validName(name, 'Project name'), ownerId])).rows[0];
 }
 export async function updateProject(id, name) {
   return (await pool.query(`UPDATE projects SET name=$2, updated_at=now() WHERE id=$1 RETURNING ${projectColumns}`, [id, validName(name, 'Project name')])).rows[0] || null;
@@ -106,17 +120,31 @@ export async function listAssets(projectId) {
   return (await pool.query(`SELECT ${assetColumns} FROM assets WHERE project_id=$1 ORDER BY created_at DESC, id`, [projectId])).rows.map(asset => ({ ...asset, url: assetUrl(asset.id) }));
 }
 export async function createAsset(projectId, filename, mediaType, contents) {
+  const id = randomUUID();
   const sha256 = createHash('sha256').update(contents).digest('hex');
-  const result = await pool.query(`INSERT INTO assets(id,project_id,filename,media_type,byte_length,sha256,contents) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING ${assetColumns}`, [randomUUID(), projectId, filename, mediaType, contents.length, sha256, contents]);
-  return { ...result.rows[0], url: assetUrl(result.rows[0].id) };
+  const objectKey = assetStorageMode() === 's3' ? `projects/${projectId}/assets/${id}` : null;
+  if (objectKey) await putObject(objectKey, contents, mediaType);
+  try {
+    const result = await pool.query(`INSERT INTO assets(id,project_id,filename,media_type,byte_length,sha256,contents,object_key) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING ${assetColumns}`, [id, projectId, filename, mediaType, contents.length, sha256, objectKey ? null : contents, objectKey]);
+    return { ...result.rows[0], url: assetUrl(id) };
+  } catch (error) {
+    if (objectKey) await deleteObject(objectKey).catch(() => {});
+    throw error;
+  }
 }
 export async function getAsset(id) {
-  return (await pool.query(`SELECT ${assetColumns}, contents FROM assets WHERE id=$1`, [id])).rows[0] || null;
+  return (await pool.query(`SELECT ${assetColumns}, contents, object_key AS "objectKey" FROM assets WHERE id=$1`, [id])).rows[0] || null;
 }
-export async function projectExportData(projectId) {
+export async function assetContents(asset) {
+  return asset.objectKey ? getObject(asset.objectKey) : asset.contents;
+}
+
+export async function projectExportData(projectId, includeContents = true) {
   const [pages, assets] = await Promise.all([
     pool.query('SELECT id, name, path, document FROM pages WHERE project_id=$1 ORDER BY path, id', [projectId]),
-    pool.query(`SELECT ${assetColumns}, contents FROM assets WHERE project_id=$1`, [projectId])
+    pool.query(`SELECT ${assetColumns}, contents, object_key AS "objectKey" FROM assets WHERE project_id=$1`, [projectId])
   ]);
-  return { pages: pages.rows, assets: assets.rows };
+  const totalBytes = assets.rows.reduce((sum, asset) => sum + asset.byteLength, 0);
+  if (pages.rows.length > 100 || (includeContents && totalBytes > 100 * 1024 * 1024)) throw Object.assign(new Error('Export exceeds the page or asset size limit'), { statusCode: 413 });
+  return { pages: pages.rows, assets: includeContents ? await Promise.all(assets.rows.map(async asset => ({ ...asset, contents: await assetContents(asset) }))) : assets.rows };
 }

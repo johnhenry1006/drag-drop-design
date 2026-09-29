@@ -181,6 +181,10 @@ function Editor({ document, setDocument, selectedId, setSelectedId, selectedRegi
 }
 
 function App() {
+  const [auth, setAuth] = useState(null);
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
   const [document, setDocument] = useState(null);
   const documentRef = useRef(null);
   const historyRef = useRef(emptyHistory());
@@ -214,6 +218,8 @@ function App() {
   const [breakpoint, setBreakpoint] = useState('desktop');
   const [previewDesktopWidth, setPreviewDesktopWidth] = useState(960);
   const [saving, setSaving] = useState(false);
+  const uploadingRef = useRef(0);
+  const [uploading, setUploading] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [showRevisions, setShowRevisions] = useState(false);
   const [revisions, setRevisions] = useState([]);
@@ -248,19 +254,23 @@ function App() {
     }
   };
   useEffect(() => {
+    api('/auth/me').then(setAuth).catch(cause => { if (cause.status === 401) setAuth({ enabled: true, user: null }); else setError(cause.message); });
+  }, []);
+  useEffect(() => {
+    if (!auth || (auth.enabled && !auth.user)) return;
     (async () => {
       try {
         const { projects: available } = await api('/projects');
         setProjects(available);
         if (available.length) await openProject(available.find(project => project.id === window.localStorage.getItem('builder:lastProjectId')) || available.find(project => project.id === '00000000-0000-4000-8000-000000000001') || available[0]);
-        else {
+        else if (!auth.enabled) {
           const project = (await api('/projects', jsonOptions('POST', { name: 'Sample project' }))).project;
           const page = (await api(`/projects/${project.id}/pages`, jsonOptions('POST', { name: 'Sample page', document: samplePage }))).page;
           setProjects([project]); setCurrentProject(project); setPages([page]); activatePage(page);
         }
       } catch (cause) { setError(cause.message); }
     })();
-  }, []);
+  }, [auth?.enabled, auth?.user?.id]);
   useEffect(() => {
     if (!dirty) return undefined;
     const warn = event => { event.preventDefault(); event.returnValue = ''; };
@@ -282,8 +292,18 @@ function App() {
     return () => window.removeEventListener('keydown', keydown);
   }, [preview]);
 
+  const login = async event => {
+    event.preventDefault(); setLoginError('');
+    try { setAuth(await api('/auth/login', jsonOptions('POST', { email: loginEmail, password: loginPassword }))); setLoginPassword(''); }
+    catch (cause) { setLoginError(cause.message); }
+  };
+  const logout = async () => {
+    await api('/auth/logout', jsonOptions('POST', {}));
+    replaceDocument(null); setCurrentProject(null); setCurrentPage(null); setProjects([]); setPages([]); setAssets([]);
+    setAuth({ enabled: true, user: null });
+  };
   const save = async () => {
-    if (!document || !currentPage || saving) return;
+    if (!document || !currentPage || saving || uploadingRef.current) return;
     const snapshot = document;
     setSaving(true);
     try {
@@ -377,12 +397,14 @@ function App() {
     } catch (cause) { setStatus({ message: cause.status === 409 ? `Restore conflict: server is at revision ${cause.currentRevision}. Reload before restoring.` : `Restore failed: ${cause.message}`, tone: 'error' }); }
   };
   const uploadAsset = async (nodeId, file) => {
+    uploadingRef.current++; setUploading(true);
     try {
       const asset = await uploadImage(currentProject.id, file);
       setAssets(previous => [asset, ...previous]);
       commitDocument(previous => updateNode(previous, nodeId, { props: { src: asset.url } }));
       setStatus({ message: `${asset.filename} uploaded; save the page to keep its reference`, tone: 'success' });
     } catch (cause) { setStatus({ message: `Image upload failed: ${cause.message}`, tone: 'error' }); }
+    finally { uploadingRef.current--; setUploading(uploadingRef.current > 0); }
   };
   useEffect(() => {
     if (!showExport || !currentProject || dirty) { setExportReport(null); return undefined; }
@@ -424,13 +446,14 @@ function App() {
     setShowExport(false);
     setPreview(value => !value);
   };
+  if (auth?.enabled && !auth.user) return <main className="login-shell"><form onSubmit={login}><h1>Sign in to Builder</h1><label>Email<input type="email" required autoComplete="username" value={loginEmail} onChange={event => setLoginEmail(event.target.value)} /></label><label>Password<input type="password" required autoComplete="current-password" value={loginPassword} onChange={event => setLoginPassword(event.target.value)} /></label>{loginError && <p role="alert">{loginError}</p>}<button type="submit">Sign in</button></form></main>;
   return <div className="app-shell">
-    <header className="app-header"><div className="app-brand"><span className="brand-mark">✦</span><strong>Northstar Builder</strong></div>
-      <div className="header-actions"><select aria-label="Project" value={currentProject?.id || ''} onChange={event => chooseProject(event.target.value)} disabled={!projects.length}>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select><button className="toolbar-button" onClick={createNewProject}>New project</button><select aria-label="Page" value={currentPage?.id || ''} onChange={event => choosePage(event.target.value)} disabled={!pages.length}>{pages.map(page => <option key={page.id} value={page.id}>{page.name} · {page.path}</option>)}</select><button className="toolbar-button" disabled={!currentProject} onClick={() => createNewPage(currentProject)}>New page</button><button className="toolbar-button" disabled={!currentPage} onClick={changePagePath}>Path</button><span className={`save-indicator ${dirty ? 'dirty' : ''}`} data-save-state={dirty ? 'unsaved' : 'saved'}>{dirty ? 'Unsaved changes' : currentPage ? `Saved · v${currentPage.revision}` : 'No page'}</span><button className="toolbar-button" disabled={!history.past.length || preview} onClick={() => navigateHistory('undo')} title="Undo (Ctrl/⌘+Z)">Undo</button><button className="toolbar-button" disabled={!history.future.length || preview} onClick={() => navigateHistory('redo')} title="Redo (Ctrl/⌘+Shift+Z)">Redo</button><button className="toolbar-button" disabled={!selectedId && !selectedRegion || preview} onClick={() => { setSelectedId(null); setSelectedRegion(null); }} title="Clear selection (Escape)">Clear selection</button><button className="toolbar-button" disabled={!dirty || saving || !currentPage} onClick={save}>{saving ? 'Saving…' : 'Save'}</button>{conflict && <button className="toolbar-button" onClick={saveAsCopy}>Save as copy</button>}<button className="toolbar-button" disabled={!currentPage} onClick={reloadPage}>Reload</button><button className="toolbar-button" disabled={!currentPage || preview} onClick={showHistory}>Revisions</button><button className="toolbar-button" disabled={!currentProject || preview} onClick={() => setShowExport(true)}>Export</button><button className="toolbar-button" disabled={!document} onClick={download}>Download JSON</button><button className="view-button" disabled={!document} onClick={togglePreview}>{preview ? 'Back to editor' : 'Preview page'}</button></div></header>
+    <header className="app-header"><div className="app-brand"><span className="brand-mark">✦</span><strong>Northstar Builder</strong>{auth?.user && <button className="toolbar-button" onClick={logout}>Sign out</button>}</div>
+      <div className="header-actions"><select aria-label="Project" value={currentProject?.id || ''} onChange={event => chooseProject(event.target.value)} disabled={!projects.length}>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select><button className="toolbar-button" onClick={createNewProject}>New project</button><select aria-label="Page" value={currentPage?.id || ''} onChange={event => choosePage(event.target.value)} disabled={!pages.length}>{pages.map(page => <option key={page.id} value={page.id}>{page.name} · {page.path}</option>)}</select><button className="toolbar-button" disabled={!currentProject} onClick={() => createNewPage(currentProject)}>New page</button><button className="toolbar-button" disabled={!currentPage} onClick={changePagePath}>Path</button><span className={`save-indicator ${dirty ? 'dirty' : ''}`} data-save-state={dirty ? 'unsaved' : 'saved'}>{dirty ? 'Unsaved changes' : currentPage ? `Saved · v${currentPage.revision}` : 'No page'}</span><button className="toolbar-button" disabled={!history.past.length || preview} onClick={() => navigateHistory('undo')} title="Undo (Ctrl/⌘+Z)">Undo</button><button className="toolbar-button" disabled={!history.future.length || preview} onClick={() => navigateHistory('redo')} title="Redo (Ctrl/⌘+Shift+Z)">Redo</button><button className="toolbar-button" disabled={!selectedId && !selectedRegion || preview} onClick={() => { setSelectedId(null); setSelectedRegion(null); }} title="Clear selection (Escape)">Clear selection</button><button className="toolbar-button" disabled={!dirty || saving || uploading || !currentPage} onClick={save}>{uploading ? 'Uploading…' : saving ? 'Saving…' : 'Save'}</button>{conflict && <button className="toolbar-button" onClick={saveAsCopy}>Save as copy</button>}<button className="toolbar-button" disabled={!currentPage} onClick={reloadPage}>Reload</button><button className="toolbar-button" disabled={!currentPage || preview} onClick={showHistory}>Revisions</button><button className="toolbar-button" disabled={!currentProject || preview || uploading} onClick={() => setShowExport(true)}>Export</button><button className="toolbar-button" disabled={!document} onClick={download}>Download JSON</button><button className="view-button" disabled={!document} onClick={togglePreview}>{preview ? 'Back to editor' : 'Preview page'}</button></div></header>
     {showRevisions && !preview && <div className="revision-popover"><strong>Page revisions</strong><p>Restoring creates a new revision.</p><label>Restore from<select aria-label="Revision to restore" value={chosenRevision} onChange={event => setChosenRevision(event.target.value)}>{revisions.map(item => <option key={item.revision} value={item.revision}>Revision {item.revision}</option>)}</select></label><button onClick={restore} disabled={!chosenRevision}>Restore revision</button></div>}
     {showExport && !preview && <div className="export-backdrop" role="presentation"><section className="export-dialog" role="dialog" aria-label="Export project"><div className="export-heading"><h2>Export project</h2><button aria-label="Close export" onClick={() => setShowExport(false)}>×</button></div><p>Download all saved pages and referenced assets as a source project.</p><label>Target<select aria-label="Export target" value={exportTarget} onChange={event => setExportTarget(event.target.value)}><option value="html">HTML5</option><option value="react">React JavaScript/JSX</option><option value="vue">Vue JavaScript</option></select></label>{dirty ? <p className="export-warning">Save the current page before exporting. Unsaved edits are not included.</p> : !exportReport && !exportError ? <p>Checking saved pages…</p> : exportReport && <><h3>Pages</h3><ul>{exportReport.pages.map(page => <li key={page.id}>{page.path} — {page.name}</li>)}</ul>{exportReport.issues.length ? <><h3>Resolve before download</h3><ul className="export-issues">{exportReport.issues.map((item, index) => <li key={index}>{item.pagePath || 'Project'}{item.nodeId ? ` · ${item.nodeId}` : ''} · {item.property}: {item.message}</li>)}</ul></> : <p className="export-ready">Ready to export {exportReport.pages.length} page(s).</p>}</>}{exportError && <p className="field-error" role="alert">{exportError}</p>}<button className="view-button" disabled={dirty || !exportReport || exportReport.issues.length > 0 || exportBusy} onClick={downloadExport}>{exportBusy ? 'Generating…' : 'Download ZIP'}</button></section></div>}
     <div className={`status-bar ${status.tone}`} role="status">{status.message}</div>
-    {error ? <div className="error">Could not load the project: {error}. Start the API and PostgreSQL with <code>npm run dev</code>. <button className="toolbar-button" onClick={() => window.location.reload()}>Retry connection</button></div> : !document ? <div className="loading">{currentProject ? 'No page open. Use New page to start editing.' : 'Loading page…'}</div> : preview ? <div className="preview-wrap"><div className="preview-toolbar"><strong>Preview</strong><ViewportSwitch breakpoint={breakpoint} onChange={setBreakpoint} /></div><div className="preview-stage" style={{ '--preview-desktop-width': `${previewDesktopWidth}px` }}><PageView document={document} interactive={false} breakpoint={breakpoint} /></div></div> : <Editor document={document} setDocument={commitDocument} selectedId={selectedId} setSelectedId={setSelectedId} selectedRegion={selectedRegion} setSelectedRegion={setSelectedRegion} breakpoint={breakpoint} setBreakpoint={setBreakpoint} onStatus={(message, tone) => setStatus({ message, tone })} onUploadAsset={uploadAsset} assets={assets} />}
+    {error ? <div className="error">Could not load the project: {error}. Start the API and PostgreSQL with <code>npm run dev</code>. <button className="toolbar-button" onClick={() => window.location.reload()}>Retry connection</button></div> : !document ? <div className="loading">{currentProject ? 'No page open. Use New page to start editing.' : auth?.user ? 'Create a project to start editing.' : 'Loading page…'}</div> : preview ? <div className="preview-wrap"><div className="preview-toolbar"><strong>Preview</strong><ViewportSwitch breakpoint={breakpoint} onChange={setBreakpoint} /></div><div className="preview-stage" style={{ '--preview-desktop-width': `${previewDesktopWidth}px` }}><PageView document={document} interactive={false} breakpoint={breakpoint} /></div></div> : <Editor document={document} setDocument={commitDocument} selectedId={selectedId} setSelectedId={setSelectedId} selectedRegion={selectedRegion} setSelectedRegion={setSelectedRegion} breakpoint={breakpoint} setBreakpoint={setBreakpoint} onStatus={(message, tone) => setStatus({ message, tone })} onUploadAsset={uploadAsset} assets={assets} />}
   </div>;
 }
 

@@ -1,4 +1,5 @@
 import { breakpoints, regions, registry } from './registry.js';
+import { supportedStyles } from './style-support.js';
 import { parseAdvancedCss } from './advanced-css.js';
 
 const plain = value => value !== null && typeof value === 'object' && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
@@ -22,8 +23,12 @@ function validateStyles(styles, path) {
     const rules = styles[breakpoint];
     if (!plain(rules)) throw new Error(`${path}.styles.${breakpoint} must be an object`);
     for (const [name, value] of Object.entries(rules)) {
-      if (!/^[a-z][a-zA-Z]*$/.test(name) || name.startsWith('on') || !['string', 'number'].includes(typeof value) || (typeof value === 'number' && !Number.isFinite(value)) || (typeof value === 'string' && /[;{}<>]/.test(value))) {
+      if (!/^[a-z][a-zA-Z]*$/.test(name) || name.startsWith('on') || !['string', 'number'].includes(typeof value) || (typeof value === 'number' && !Number.isFinite(value)) || (typeof value === 'string' && (value.length > 2048 || /[;{}<>\\]|\/\*|\*\/|(?:url|image-set|expression|var|env)\s*\(/i.test(value)))) {
         throw new Error(`${path}.styles.${breakpoint}.${name} is invalid`);
+      }
+      if (supportedStyles.has(name) && typeof value === 'string') {
+        try { parseAdvancedCss(`${name.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)}:${value}`); }
+        catch (error) { throw new Error(`${path}.styles.${breakpoint}.${name}: ${error.message}`, { cause: error }); }
       }
     }
   }
@@ -35,7 +40,7 @@ function validateAdvancedCss(value, path) {
   for (const [breakpoint, declarations] of Object.entries(value)) {
     if (typeof declarations !== 'string' || !declarations.trim()) throw new Error(`${path}.advancedCss.${breakpoint} must contain declarations`);
     try { parseAdvancedCss(declarations); }
-    catch (error) { throw new Error(`${path}.advancedCss.${breakpoint}: ${error.message}`); }
+    catch (error) { throw new Error(`${path}.advancedCss.${breakpoint}: ${error.message}`, { cause: error }); }
   }
 }
 

@@ -161,3 +161,11 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .palette-search input { width: 100%; padding: 9px; border: 1px solid #dce3ee; border-radius: 7px; }
 .palette-support, .palette-no-results { margin: 3px 8px 10px; color: #8190a8; font-size: 10px; line-height: 1.45; }
 .page [data-node-id]:focus-visible { outline: 3px solid #2149bd; outline-offset: 3px; }
+
+.login-shell { min-height: 100vh; display: grid; place-items: center; background: #f1f3f8; }
+.login-shell form { width: min(400px, calc(100vw - 32px)); padding: 30px; background: white; border: 1px solid #dce3ee; border-radius: 12px; box-shadow: 0 8px 32px #172b581c; }
+.login-shell h1 { margin: 0 0 22px; font-size: 22px; }
+.login-shell label { display: block; margin: 14px 0; font-size: 12px; font-weight: 700; }
+.login-shell input { display: block; width: 100%; margin-top: 7px; padding: 10px; border: 1px solid #dce3ee; border-radius: 7px; }
+.login-shell button { width: 100%; margin-top: 12px; padding: 11px; border: 0; border-radius: 7px; background: #4f6fdd; color: white; font-weight: 700; }
+.login-shell [role=alert] { color: #a33842; }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { samplePage } from '../src/index.js';
+import { findNode, samplePage } from '../src/index.js';
 import { exportHtml, exportReact, exportVue } from '../../exporters/src/index.js';
 
 test('all targets contain the sample content, semantic regions, and stable classes', () => {
@@ -30,4 +30,18 @@ test('exporter names an unsupported property instead of dropping it', () => {
   const unknownProp = structuredClone(samplePage);
   unknownProp.regions.main[2].props.subtitle = 'Unexpected';
   assert.throws(() => exportHtml(unknownProp), /unsupported property subtitle/);
+});
+
+test('untrusted content stays data in HTML, JSX and Vue and CSS cannot load resources', () => {
+  const page = structuredClone(samplePage);
+  page.props.title = '<script>alert(1)</script>';
+  findNode(page, 'hero_title').node.props.text = '<img src=x onerror=alert(1)>';
+  const html = exportHtml(page)['index.html'];
+  assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/);
+  assert.match(exportReact(page)['src/App.jsx'], /\{"<img src=x onerror=alert\(1\)>"\}/);
+  assert.match(exportVue(page)['src/main.js'], /<img src=x onerror=alert\(1\)>/);
+  findNode(page, 'hero_title').node.styles.desktop.color = 'url(https://example.com/collect)';
+  assert.throws(() => exportHtml(page), /styles.desktop.color is invalid/);
 });

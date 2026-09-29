@@ -6,13 +6,17 @@
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "db:migrate": "node src/migrate.js",
-    "test": "NODE_ENV=test node --test test/*.test.js"
+    "test": "NODE_ENV=test node --test test/*.test.js",
+    "user:create": "node src/create-user.js",
+    "assets:backfill": "node src/backfill-assets.js"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1142.0",
     "@builder/document": "*",
     "@builder/exporters": "*",
     "fastify": "^5.6.0",
     "fflate": "^0.8.3",
+    "image-size": "^2.0.4",
     "pg": "^8.16.0"
   }
 }

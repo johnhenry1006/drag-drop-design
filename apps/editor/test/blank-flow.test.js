@@ -24,7 +24,7 @@ async function doc(page) {
 
 test('blank page edits, history, save/reload, preview, and all exported project builds', { timeout: 120000 }, async () => {
   const project = (await (await request('/projects', json('POST', { name: `Blank flow ${Date.now()}` }))).json()).project;
-  const created = (await (await request(`/projects/${project.id}/pages`, json('POST', { name: 'Blank flow', path: '/', document: blank }))).json()).page;
+  await (await request(`/projects/${project.id}/pages`, json('POST', { name: 'Blank flow', path: '/', document: blank }))).json();
   let root;
   const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || '/usr/bin/google-chrome', headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
   try {

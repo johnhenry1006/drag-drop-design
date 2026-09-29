@@ -1,0 +1,69 @@
+name: CI
+on:
+  push:
+  pull_request:
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: builder
+          POSTGRES_PASSWORD: test-only-password
+          POSTGRES_DB: builder
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U builder -d builder"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      s3:
+        image: scireum/s3-ninja:latest
+        ports:
+          - 9444:9000
+    env:
+      DATABASE_URL: postgres://builder:test-only-password@127.0.0.1:5432/builder
+      ASSET_STORE: s3
+      S3_ENDPOINT: http://127.0.0.1:9444
+      S3_REGION: us-east-1
+      S3_BUCKET: builder-ci
+      S3_ACCESS_KEY_ID: AKIAIOSFODNN7EXAMPLE
+      S3_SECRET_ACCESS_KEY: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright-core install --with-deps chromium
+      - name: Set browser path
+        run: echo "CHROME_PATH=$(node -e 'import("playwright-core").then(({chromium})=>console.log(chromium.executablePath()))')" >> "$GITHUB_ENV"
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+      - name: Wait for S3 and create test bucket
+        run: |
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:9444/ui/ >/dev/null && break; sleep 2; done
+          node scripts/create-test-bucket.js
+      - run: npm run test:api
+      - name: Browser flow without accounts
+        run: |
+          npm run dev >/tmp/builder-dev.log 2>&1 & server_pid=$!
+          trap 'kill $server_pid || true' EXIT
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:3001/api/health/ready >/dev/null && break; sleep 2; done
+          npm run test:editor
+      - name: Authenticated S3 browser flow and exported builds
+        env:
+          AUTH_MODE: local
+          AUTH_SMOKE: '1'
+          PUBLIC_ORIGIN: http://127.0.0.1:5173
+        run: |
+          npm run dev >/tmp/builder-auth-dev.log 2>&1 & server_pid=$!
+          trap 'kill $server_pid || true' EXIT
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:3001/api/health/ready >/dev/null && break; sleep 2; done
+          node --test apps/editor/test/auth-smoke.test.js
+      - name: Build production images
+        run: |
+          docker build -f deploy/Dockerfile.api -t builder-api:ci .
+          docker build -f deploy/Dockerfile.web -t builder-web:ci .
