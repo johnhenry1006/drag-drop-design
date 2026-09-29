@@ -16,7 +16,10 @@ export const paletteItems = [
   { key: 'Link', label: 'Link', group: 'Navigation', icon: '↗' },
   { key: 'Card', label: 'Card', group: 'Content', icon: '▢' },
   { key: 'Badge', label: 'Badge', group: 'Content', icon: '●' },
-  { key: 'Chip', label: 'Chip', group: 'Content', icon: '◖' }
+  { key: 'Chip', label: 'Chip', group: 'Content', icon: '◖' },
+  { key: 'Lists', label: 'Lists', group: 'Content', icon: '☷' },
+  { key: 'Table', label: 'Table', group: 'Content', icon: '▦' },
+  { key: 'Tooltip', label: 'Tooltip', group: 'Content', icon: '?' }
 ];
 
 const styles = desktop => ({ desktop, tablet: {}, mobile: {} });
@@ -47,5 +50,11 @@ export function createPaletteNode(key) {
   if (key === 'Text') return basic(key, {}, { lineHeight: '1.5' });
   if (key === 'Link') return basic(key, {}, { color: '#4f6fdd', display: 'inline-block', padding: '6px' });
   if (key === 'Button') return basic(key, {}, { display: 'inline-block', backgroundColor: '#4f6fdd', color: '#fff', padding: '10px 16px', borderRadius: '8px' });
+  if (key === 'Lists') return basic(key, { items: registry.Lists.defaults.items.map(item => ({ ...item, id: id() })) });
+  if (key === 'Table') {
+    const columns = registry.Table.defaults.columns.map(column => ({ ...column, id: id() }));
+    const rows = registry.Table.defaults.rows.map(row => ({ id: id(), cells: Object.fromEntries(registry.Table.defaults.columns.map((column, index) => [columns[index].id, row.cells[column.id]])) }));
+    return basic(key, { columns, rows });
+  }
   return basic(key);
 }

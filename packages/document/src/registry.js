@@ -1,4 +1,4 @@
-const containerChildren = ['Section', 'Container', 'Layout', 'Navigation', 'Heading', 'Text', 'Image', 'Button', 'Link', 'Card', 'Avatar', 'Badge', 'Chip', 'Icons'];
+const containerChildren = ['Section', 'Container', 'Layout', 'Navigation', 'Heading', 'Text', 'Image', 'Button', 'Link', 'Card', 'Avatar', 'Badge', 'Chip', 'Icons', 'Lists', 'Table', 'Tooltip'];
 
 export const registry = Object.freeze({
   Section: { kind: 'container', tag: 'section', defaults: { label: 'Section' }, editable: ['label'], children: containerChildren, renderer: 'container', exports: ['html', 'react', 'vue'] },
@@ -14,7 +14,10 @@ export const registry = Object.freeze({
   Avatar: { kind: 'element', tag: 'span', defaults: { src: '', alt: '', name: 'Alex Morgan', initials: 'AM', shape: 'circle', size: 48 }, editable: ['src', 'alt', 'name', 'initials', 'shape', 'size'], children: [], renderer: 'avatar', exports: ['html', 'react', 'vue'], exportNote: 'Image and initials fallback are supported. Remote images still depend on their host.' },
   Badge: { kind: 'element', tag: 'span', defaults: { content: 'Inbox', text: '', count: 3, maxCount: 99, color: '#d4344a', placement: 'topRight' }, editable: ['content', 'text', 'count', 'maxCount', 'color', 'placement'], children: [], renderer: 'badge', exports: ['html', 'react', 'vue'], exportNote: 'Display-only badge anchored to its own text; arbitrary child anchors are not supported.' },
   Chip: { kind: 'element', tag: 'span', defaults: { label: 'Featured', icon: 'star' }, editable: ['label', 'icon'], children: [], renderer: 'chip', exports: ['html', 'react', 'vue'], exportNote: 'Display-only chip with an optional bundled icon. Dismissal is not supported.' },
-  Icons: { kind: 'element', tag: 'svg', defaults: { icon: 'star', name: 'Star', size: 24, color: '#334155' }, editable: ['icon', 'name', 'size', 'color'], children: [], renderer: 'icon', exports: ['html', 'react', 'vue'], exportNote: 'Five bundled CC0 icons; icon IDs are fixed and custom SVG is not supported.' }
+  Icons: { kind: 'element', tag: 'svg', defaults: { icon: 'star', name: 'Star', size: 24, color: '#334155' }, editable: ['icon', 'name', 'size', 'color'], children: [], renderer: 'icon', exports: ['html', 'react', 'vue'], exportNote: 'Five bundled CC0 icons; icon IDs are fixed and custom SVG is not supported.' },
+  Lists: { kind: 'element', tag: 'ul', defaults: { mode: 'unordered', items: [{ id: 'item_1', text: 'First item' }, { id: 'item_2', text: 'Second item' }] }, editable: ['mode', 'items'], children: [], renderer: 'list', exports: ['html', 'react', 'vue'], exportNote: 'Plain-text items with stable item IDs; nested elements are not supported.' },
+  Table: { kind: 'element', tag: 'table', defaults: { caption: '', columns: [{ id: 'col_1', label: 'Name' }, { id: 'col_2', label: 'Value' }], rows: [{ id: 'row_1', cells: { col_1: 'Item', col_2: 'Detail' } }] }, editable: ['caption', 'columns', 'rows'], children: [], renderer: 'table', exports: ['html', 'react', 'vue'], exportNote: 'Plain-text cells and column headers with horizontal overflow; nested elements are not supported.' },
+  Tooltip: { kind: 'element', tag: 'span', defaults: { trigger: 'More information', content: 'Helpful detail', placement: 'top' }, editable: ['trigger', 'content', 'placement'], children: [], renderer: 'tooltip', exports: ['html', 'react', 'vue'], exportNote: 'Hover, focus, and tap-to-toggle are supported in Preview and exports. Edit mode selects the node.' }
 });
 
 export const breakpoints = ['desktop', 'tablet', 'mobile'];

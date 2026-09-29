@@ -5,10 +5,15 @@ import { iconIds } from './icons.js';
 
 const plain = value => value !== null && typeof value === 'object' && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 const identifier = value => typeof value === 'string' && /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(value);
-const newTypes = new Set(['Avatar', 'Badge', 'Chip', 'Icons']);
+const newTypes = new Set(['Avatar', 'Badge', 'Chip', 'Icons', 'Lists', 'Table', 'Tooltip']);
 const stringField = (value, max = 200) => typeof value === 'string' && value.length <= max;
 const integerField = (value, min, max) => Number.isInteger(value) && value >= min && value <= max;
 const colorField = value => typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value);
+const exactKeys = (value, keys) => plain(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
+const uniqueIds = values => values.every(plain) && new Set(values.map(value => value.id)).size === values.length;
+const validItems = value => Array.isArray(value) && value.length <= 100 && uniqueIds(value) && value.every(item => exactKeys(item, ['id', 'text']) && identifier(item.id) && stringField(item.text, 1000));
+const validColumns = value => Array.isArray(value) && value.length >= 1 && value.length <= 20 && uniqueIds(value) && value.every(column => exactKeys(column, ['id', 'label']) && identifier(column.id) && stringField(column.label, 200) && column.label.trim());
+const validRows = value => Array.isArray(value) && value.length <= 100 && uniqueIds(value) && value.every(row => exactKeys(row, ['id', 'cells']) && identifier(row.id) && plain(row.cells) && Object.values(row.cells).every(cell => stringField(cell, 1000)));
 
 function validNewProp(type, key, value) {
   if (type === 'Avatar') {
@@ -30,6 +35,12 @@ function validNewProp(type, key, value) {
     if (key === 'color') return colorField(value);
     return stringField(value, 100);
   }
+  if (type === 'Lists') return key === 'mode' ? ['ordered', 'unordered'].includes(value) : validItems(value);
+  if (type === 'Table') {
+    if (key === 'caption') return stringField(value, 300);
+    return key === 'columns' ? validColumns(value) : validRows(value);
+  }
+  if (type === 'Tooltip') return key === 'placement' ? ['top', 'bottom', 'left', 'right'].includes(value) : stringField(value, 500) && Boolean(value.trim());
   return false;
 }
 
@@ -93,6 +104,12 @@ function validateNode(node, path, ids) {
   if (node.type === 'Icons' && !node.props.name?.trim()) throw new Error(`${path}.props.name needs an accessible name`);
   if (node.type === 'Badge' && !node.props.content?.trim()) throw new Error(`${path}.props.content needs anchor text`);
   if (node.type === 'Chip' && !node.props.label?.trim()) throw new Error(`${path}.props.label is required`);
+  if (node.type === 'Table') {
+    const columnIds = node.props.columns.map(column => column.id);
+    for (const [index, row] of node.props.rows.entries()) {
+      if (Object.keys(row.cells).length !== columnIds.length || columnIds.some(id => !Object.hasOwn(row.cells, id))) throw new Error(`${path}.props.rows[${index}].cells must match columns`);
+    }
+  }
   validateStyles(node.styles, path);
   validateAdvancedCss(node.advancedCss, path);
   if (registry[node.type].kind === 'container') {

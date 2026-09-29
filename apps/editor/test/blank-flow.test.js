@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,6 +12,13 @@ const blank = { schemaVersion: 1, id: `page_${crypto.randomUUID().replaceAll('-'
 const json = (method, body) => ({ method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 const request = async (path, options) => { const response = await fetch(api + path, options); if (!response.ok) throw new Error(`${path}: ${response.status} ${await response.text()}`); return response; };
 const add = (page, type) => page.locator(`[data-palette="${type}"]`).click();
+async function waitForServer(url) {
+  for (let attempt = 0; attempt < 40; attempt++) {
+    try { if ((await fetch(url)).ok) return; } catch { /* waiting for exported server */ }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error(`Exported server did not start: ${url}`);
+}
 async function selectRegion(page, region) {
   await page.getByRole('button', { name: 'Layers', exact: true }).click();
   await page.locator(`[data-layer-region="${region}"] > button:first-child`).click();
@@ -112,22 +119,68 @@ test('blank page edits, history, save/reload, preview, and all exported project 
     await selectRegion(page, 'footer');
     await add(page, 'Chip');
     await page.getByLabel('Chip label').fill('Featured');
+    await selectRegion(page, 'main');
+    await add(page, 'Lists');
+    await page.getByLabel('List mode').selectOption('ordered');
+    await page.getByRole('textbox', { name: 'Item 1' }).fill('Keep this text');
+    await page.getByRole('button', { name: 'Add item' }).click();
+    await page.getByRole('button', { name: 'Move item 1 down' }).click();
+    await page.getByRole('button', { name: 'Remove item 3' }).click();
+    await selectRegion(page, 'main');
+    await add(page, 'Table');
+    await page.getByLabel('Caption (optional)').fill('Comparison');
+    await page.getByRole('button', { name: 'Add column' }).click();
+    await page.getByLabel('Column 3 header').fill('Notes');
+    await page.getByLabel('Column 3 header').press('Tab');
+    await page.getByRole('button', { name: 'Add row' }).click();
+    await page.getByLabel('Notes').first().fill('Plain text');
+    await page.getByRole('button', { name: 'Remove column 2' }).click();
+    await page.getByRole('button', { name: 'mobile', exact: true }).click();
+    await page.getByRole('tab', { name: 'layout' }).click();
+    await page.locator('[data-style-field="width"] input').fill('120px');
+    await selectRegion(page, 'footer');
+    await add(page, 'Tooltip');
+    await page.getByLabel('Trigger label').fill('Details');
+    await page.getByLabel('Trigger label').press('Tab');
+    await page.getByLabel('Tooltip content').fill('More about this page');
+    await page.getByLabel('Tooltip content').press('Tab');
+    await page.getByLabel('Placement').selectOption('bottom');
     const before = await doc(page);
     assert.ok(before.regions.header.some(node => node.type === 'Avatar'));
     assert.ok(before.regions.main.some(node => node.type === 'Badge'));
     assert.ok(before.regions.main.some(node => node.type === 'Icons'));
     assert.ok(before.regions.footer.some(node => node.type === 'Chip'));
+    const savedList = before.regions.main.find(node => node.type === 'Lists');
+    assert.equal(savedList.props.mode, 'ordered');
+    assert.equal(savedList.props.items.length, 2);
+    assert.equal(savedList.props.items[1].text, 'Keep this text');
+    const savedTable = before.regions.main.find(node => node.type === 'Table');
+    assert.equal(savedTable.props.columns.length, 2);
+    assert.equal(savedTable.props.rows.length, 2);
+    assert.ok(savedTable.props.rows.every(row => Object.keys(row.cells).length === savedTable.props.columns.length));
+    assert.ok(before.regions.footer.some(node => node.type === 'Tooltip' && node.props.content === 'More about this page'));
     await page.getByRole('button', { name: 'Save', exact: true }).click();
     await page.locator('[data-save-state="saved"]').waitFor();
     await page.getByRole('button', { name: 'Reload', exact: true }).click();
     assert.deepEqual(await doc(page), before);
     await page.getByRole('button', { name: 'Preview page' }).click();
+    await page.getByRole('button', { name: 'mobile', exact: true }).click();
     assert.match(await page.locator('.preview-stage').innerText(), /Directly in Main/);
     assert.match(await page.locator('.preview-stage').innerText(), /Studio/);
     await page.locator('.preview-stage .builder-avatar img').evaluate(image => image.decode());
     assert.equal(await page.locator('.preview-stage .builder-avatar img').evaluate(image => image.naturalWidth), 1);
     assert.equal(await page.locator('.preview-stage .builder-avatar').getAttribute('aria-label'), 'Ada Lovelace');
     assert.equal(await page.locator('.preview-stage .builder-icon').getAttribute('aria-label'), 'Star');
+    assert.equal(await page.locator('.preview-stage .builder-table-scroll table th').count(), 2);
+    assert.equal(await page.locator('.preview-stage .builder-list li').count(), 2);
+    assert.equal(await page.locator('.preview-stage .builder-table-scroll').evaluate(element => element.scrollWidth > element.clientWidth), true);
+    const tipButton = page.locator('.preview-stage .builder-tooltip button');
+    await tipButton.focus();
+    assert.equal(await page.locator('.preview-stage .builder-tooltip-content').evaluate(element => getComputedStyle(element).visibility), 'visible');
+    await tipButton.click();
+    assert.equal(await tipButton.getAttribute('aria-expanded'), 'true');
+    await tipButton.click();
+    assert.equal(await tipButton.getAttribute('aria-expanded'), 'false');
     await page.route(/\/api\/assets\/.*\/content/, route => route.abort());
     await page.reload();
     await page.getByRole('combobox', { name: 'Project' }).selectOption(project.id);
@@ -137,6 +190,18 @@ test('blank page edits, history, save/reload, preview, and all exported project 
     assert.match(await page.locator('.preview-stage .builder-avatar').innerText(), /AL/);
     await page.unroute(/\/api\/assets\/.*\/content/);
     await page.getByRole('button', { name: 'Back to editor' }).click();
+    const touchContext = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+    const touchPage = await touchContext.newPage();
+    await touchPage.goto(process.env.EDITOR_URL || 'http://127.0.0.1:5173/');
+    await touchPage.getByRole('combobox', { name: 'Project' }).selectOption(project.id);
+    await touchPage.getByRole('button', { name: 'Preview page' }).click();
+    const touchTip = touchPage.locator('.preview-stage .builder-tooltip button');
+    await touchTip.tap();
+    assert.equal(await touchTip.getAttribute('aria-expanded'), 'true');
+    await touchTip.tap();
+    assert.equal(await touchTip.getAttribute('aria-expanded'), 'false');
+    assert.equal(await touchPage.locator('.preview-stage .builder-tooltip-content').evaluate(element => getComputedStyle(element).visibility), 'hidden');
+    await touchContext.close();
 
     root = await mkdtemp(join(tmpdir(), 'builder-blank-flow-'));
     for (const target of ['html', 'react', 'vue']) {
@@ -150,9 +215,36 @@ test('blank page edits, history, save/reload, preview, and all exported project 
       execFileSync('npm', ['run', 'build'], { cwd: directory });
       assert.match(await readFile(join(directory, target === 'html' ? 'index.html' : `src/pages.${target === 'react' ? 'jsx' : 'js'}`), 'utf8'), /article/);
       const source = await readFile(join(directory, target === 'html' ? 'index.html' : `src/pages.${target === 'react' ? 'jsx' : 'js'}`), 'utf8');
-      for (const type of ['builder-avatar', 'builder-badge', 'builder-chip', 'builder-icon']) assert.match(source, new RegExp(type));
+      for (const type of ['builder-avatar', 'builder-badge', 'builder-chip', 'builder-icon', 'builder-list', 'builder-table-scroll']) assert.match(source, new RegExp(type));
+      assert.match(source, target === 'html' ? /builder-tooltip/ : /TooltipControl/);
       const assetId = before.regions.header.find(node => node.type === 'Avatar').props.src.split('/')[3];
       assert.deepEqual(await readFile(join(directory, target === 'html' ? `dist/assets/${assetId}.png` : `dist/assets/${assetId}.png`)), imageBytes);
+      const port = target === 'html' ? 4173 : target === 'react' ? 4174 : 4175;
+      const server = target === 'html' ? spawn(process.execPath, ['server.js', 'dist'], { cwd: directory, stdio: 'ignore' }) : spawn(join(directory, 'node_modules/.bin/vite'), ['preview', '--host', '127.0.0.1', '--port', String(port), '--strictPort'], { cwd: directory, stdio: 'ignore' });
+      try {
+        await waitForServer(`http://127.0.0.1:${port}/`);
+        const exportContext = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+        const exported = await exportContext.newPage();
+        await exported.goto(`http://127.0.0.1:${port}/`);
+        assert.equal(await exported.locator('.builder-table-scroll th').count(), 2);
+        assert.equal(await exported.locator('.builder-list li').count(), 2);
+        assert.equal(await exported.locator('.builder-table-scroll').evaluate(element => element.scrollWidth > element.clientWidth), true);
+        const trigger = exported.locator('.builder-tooltip button');
+        await trigger.focus();
+        assert.equal(await exported.locator('.builder-tooltip-content').evaluate(element => getComputedStyle(element).visibility), 'visible');
+        await trigger.tap();
+        assert.equal(await trigger.getAttribute('aria-expanded'), 'true');
+        await trigger.tap();
+        assert.equal(await trigger.getAttribute('aria-expanded'), 'false');
+        assert.equal(await exported.locator('.builder-tooltip-content').evaluate(element => getComputedStyle(element).visibility), 'hidden');
+        await trigger.focus();
+        await trigger.press('Escape');
+        assert.equal(await exported.locator('.builder-tooltip-content').evaluate(element => getComputedStyle(element).visibility), 'hidden');
+        await exportContext.close();
+      } finally {
+        server.kill('SIGTERM');
+        if (server.exitCode === null) await new Promise(resolve => server.once('exit', resolve));
+      }
     }
   } finally {
     await browser.close();

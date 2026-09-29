@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { documentCss, iconPaths, regions, registry } from '@builder/document';
 import { useDroppable } from '@dnd-kit/react';
 import { pointerIntersection } from '@dnd-kit/collision';
@@ -13,8 +13,18 @@ const renderers = {
   avatar: (node, content, common) => <span {...common} className="builder-avatar" data-shape={node.props.shape} role="img" aria-label={node.props.alt || node.props.name} style={{ '--avatar-size': `${node.props.size}px` }}><span aria-hidden="true">{node.props.initials || node.props.name?.split(/\s+/).map(word => word[0]).slice(0, 2).join('').toUpperCase()}</span>{node.props.src && <img key={node.props.src} src={node.props.src} alt="" aria-hidden="true" onError={event => { event.currentTarget.hidden = true; }} />}</span>,
   badge: (node, content, common) => <span {...common} className="builder-badge" data-placement={node.props.placement} style={{ '--badge-color': node.props.color }}><span>{node.props.content}</span><span className="builder-badge-mark" aria-label={node.props.text || (node.props.maxCount > 0 && node.props.count > node.props.maxCount ? `${node.props.maxCount} plus` : String(node.props.count))}>{node.props.text || (node.props.maxCount > 0 && node.props.count > node.props.maxCount ? `${node.props.maxCount}+` : node.props.count)}</span></span>,
   chip: (node, content, common) => <span {...common} className="builder-chip">{node.props.icon && <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d={iconPaths[node.props.icon]} /></svg>}<span>{node.props.label}</span></span>,
-  icon: (node, content, common) => <svg {...common} className="builder-icon" viewBox="0 0 24 24" role="img" aria-label={node.props.name} style={{ '--icon-size': `${node.props.size}px`, '--icon-color': node.props.color }}><path d={iconPaths[node.props.icon]} /></svg>
+  icon: (node, content, common) => <svg {...common} className="builder-icon" viewBox="0 0 24 24" role="img" aria-label={node.props.name} style={{ '--icon-size': `${node.props.size}px`, '--icon-color': node.props.color }}><path d={iconPaths[node.props.icon]} /></svg>,
+  list: (node, content, common) => React.createElement(node.props.mode === 'ordered' ? 'ol' : 'ul', { ...common, className: 'builder-list' }, node.props.items.map(item => <li key={item.id}>{item.text}</li>)),
+  table: (node, content, common) => <div {...common} className="builder-table-scroll" role="region" aria-label={node.props.caption || 'Table'} tabIndex={0}><table>{node.props.caption && <caption>{node.props.caption}</caption>}<thead><tr>{node.props.columns.map(column => <th key={column.id} scope="col">{column.label}</th>)}</tr></thead><tbody>{node.props.rows.map(row => <tr key={row.id}>{node.props.columns.map(column => <td key={column.id}>{row.cells[column.id]}</td>)}</tr>)}</tbody></table></div>,
+  tooltip: (node, content, common) => <TooltipNode node={node} common={common} />
 };
+
+function TooltipNode({ node, common }) {
+  const [open, setOpen] = useState(false);
+  const [touched, setTouched] = useState(false);
+  const editing = Boolean(common.onClick);
+  return <span {...common} className="builder-tooltip" data-placement={node.props.placement} data-open={open ? 'true' : undefined} data-touched={touched ? 'true' : undefined} data-edit={editing ? 'true' : undefined} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) { setOpen(false); setTouched(false); } }}><button type="button" aria-describedby={`tip-${node.id}`} aria-expanded={open} onClick={event => { if (editing) { common.onClick(event); return; } setTouched(true); setOpen(value => !value); }} onKeyDown={event => { if (event.key === 'Escape') { setOpen(false); setTouched(false); event.currentTarget.blur(); } }}>{node.props.trigger}</button><span id={`tip-${node.id}`} role="tooltip" className="builder-tooltip-content">{node.props.content}</span></span>;
+}
 
 function NodeView({ node, selectedId, onSelect, dropTarget, depth }) {
   const { ref } = useDroppable({ id: `canvas-node:${node.id}`, accept: ['palette', 'tree-node'], collisionDetector: pointerIntersection, collisionPriority: depth + 2 });
@@ -28,7 +38,7 @@ function NodeView({ node, selectedId, onSelect, dropTarget, depth }) {
     'data-empty': node.children?.length === 0 ? 'true' : undefined,
     tabIndex: onSelect ? 0 : undefined,
     'aria-label': onSelect ? `Select ${node.type}: ${node.props.label || node.props.text || node.type}` : undefined,
-    onKeyDown: onSelect ? event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); onSelect(node.id); } } : undefined,
+    onKeyDown: onSelect ? event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); event.stopPropagation(); onSelect(node.id); } } : undefined,
     onClick: onSelect ? event => { event.preventDefault(); event.stopPropagation(); onSelect(node.id); } : undefined
   };
   return renderers[registry[node.type].renderer](node, content, common);

@@ -27,6 +27,34 @@ function BoxModel({ node, breakpoint, onChange }) {
   </div></div>;
 }
 
+const structuredId = prefix => `${prefix}_${crypto.randomUUID().replaceAll('-', '')}`;
+const swap = (values, index, nextIndex) => {
+  const copy = [...values];
+  [copy[index], copy[nextIndex]] = [copy[nextIndex], copy[index]];
+  return copy;
+};
+
+function ListFields({ node, onChange }) {
+  const { items } = node.props;
+  const setItems = next => onChange(node.id, { props: { items: next } });
+  return <><label className="field"><span>List mode</span><select value={node.props.mode} onChange={event => onChange(node.id, { props: { mode: event.target.value } })}><option value="unordered">Unordered</option><option value="ordered">Ordered</option></select></label><h3>Items</h3>
+    {items.map((item, index) => <div className="structured-row" key={item.id}><label className="field"><span>Item {index + 1}</span><input value={item.text} onChange={event => setItems(items.map(current => current.id === item.id ? { ...current, text: event.target.value } : current))} /></label><div className="order-actions"><button aria-label={`Move item ${index + 1} up`} disabled={index === 0} onClick={() => setItems(swap(items, index, index - 1))}>↑</button><button aria-label={`Move item ${index + 1} down`} disabled={index === items.length - 1} onClick={() => setItems(swap(items, index, index + 1))}>↓</button><button aria-label={`Remove item ${index + 1}`} onClick={() => setItems(items.filter(current => current.id !== item.id))}>Remove</button></div></div>)}
+    <button onClick={() => setItems([...items, { id: structuredId('item'), text: 'New item' }])} disabled={items.length >= 100}>Add item</button></>;
+}
+
+function TableFields({ node, onChange }) {
+  const { columns, rows } = node.props;
+  const set = patch => onChange(node.id, { props: patch });
+  const addColumn = () => { const id = structuredId('col'); set({ columns: [...columns, { id, label: 'New column' }], rows: rows.map(row => ({ ...row, cells: { ...row.cells, [id]: '' } })) }); };
+  const removeColumn = id => set({ columns: columns.filter(column => column.id !== id), rows: rows.map(row => { const cells = { ...row.cells }; delete cells[id]; return { ...row, cells }; }) });
+  const addRow = () => set({ rows: [...rows, { id: structuredId('row'), cells: Object.fromEntries(columns.map(column => [column.id, ''])) }] });
+  return <><label className="field"><span>Caption (optional)</span><input value={node.props.caption} onChange={event => set({ caption: event.target.value })} /></label><h3>Columns</h3>
+    {columns.map((column, index) => <div className="structured-row" key={column.id}><label className="field"><span>Column {index + 1} header</span><input defaultValue={column.label} onBlur={event => { if (event.target.value.trim()) set({ columns: columns.map(current => current.id === column.id ? { ...current, label: event.target.value } : current) }); else event.target.value = column.label; }} /></label><div className="order-actions"><button aria-label={`Move column ${index + 1} left`} disabled={index === 0} onClick={() => set({ columns: swap(columns, index, index - 1) })}>←</button><button aria-label={`Move column ${index + 1} right`} disabled={index === columns.length - 1} onClick={() => set({ columns: swap(columns, index, index + 1) })}>→</button><button aria-label={`Remove column ${index + 1}`} disabled={columns.length === 1} onClick={() => removeColumn(column.id)}>Remove</button></div></div>)}
+    <button onClick={addColumn} disabled={columns.length >= 20}>Add column</button><h3>Rows</h3>
+    {rows.map((row, rowIndex) => <div className="structured-row" key={row.id}><strong>Row {rowIndex + 1}</strong>{columns.map(column => <label className="field" key={column.id}><span>{column.label}</span><input value={row.cells[column.id]} onChange={event => set({ rows: rows.map(current => current.id === row.id ? { ...current, cells: { ...current.cells, [column.id]: event.target.value } } : current) })} /></label>)}<div className="order-actions"><button aria-label={`Move row ${rowIndex + 1} up`} disabled={rowIndex === 0} onClick={() => set({ rows: swap(rows, rowIndex, rowIndex - 1) })}>↑</button><button aria-label={`Move row ${rowIndex + 1} down`} disabled={rowIndex === rows.length - 1} onClick={() => set({ rows: swap(rows, rowIndex, rowIndex + 1) })}>↓</button><button aria-label={`Remove row ${rowIndex + 1}`} onClick={() => set({ rows: rows.filter(current => current.id !== row.id) })}>Remove</button></div></div>)}
+    <button onClick={addRow} disabled={rows.length >= 100}>Add row</button></>;
+}
+
 function ContentTab({ node, location, siblingCount, onChange, onReorder, onRemove, onUploadAsset, assets }) {
   const props = node.props;
   const textLabel = node.type === 'Button' ? 'Button label' : node.type === 'Link' ? 'Link label' : node.type === 'Heading' ? 'Heading text' : 'Text';
@@ -42,6 +70,9 @@ function ContentTab({ node, location, siblingCount, onChange, onReorder, onRemov
     {node.type === 'Badge' && <>{field('content', 'Anchor text')}{field('text', 'Badge text (overrides count)')}{field('count', 'Count', 'number')}{field('maxCount', 'Maximum shown (0 disables)', 'number')}{field('color', 'Badge color', 'color')}{choice('placement', 'Placement', [['topRight', 'Top right'], ['topLeft', 'Top left'], ['bottomRight', 'Bottom right'], ['bottomLeft', 'Bottom left']])}</>}
     {node.type === 'Chip' && <>{field('label', 'Chip label')}{iconChoice('icon', true)}</>}
     {node.type === 'Icons' && <>{iconChoice('icon')}{field('name', 'Accessible name')}{field('size', 'Size in pixels', 'number')}{field('color', 'Icon color', 'color')}</>}
+    {node.type === 'Lists' && <ListFields node={node} onChange={onChange} />}
+    {node.type === 'Table' && <TableFields node={node} onChange={onChange} />}
+    {node.type === 'Tooltip' && <>{['trigger', 'content'].map(key => <label className="field" key={key}><span>{key === 'trigger' ? 'Trigger label' : 'Tooltip content'}</span><input defaultValue={props[key]} key={`${node.id}-${key}-${props[key]}`} onBlur={event => { if (event.target.value.trim()) onChange(node.id, { props: { [key]: event.target.value } }); else event.target.value = props[key]; }} /></label>)}{choice('placement', 'Placement', [['top', 'Top'], ['bottom', 'Bottom'], ['left', 'Left'], ['right', 'Right']])}</>}
     {(node.type === 'Button' || node.type === 'Link') && <label className="field"><span>Link destination</span><input value={props.href} placeholder="#section or https://…" onChange={event => onChange(node.id, { props: { href: event.target.value } })} /></label>}
     <p className="property-note">Export: {registry[node.type].exports.join(', ').toUpperCase()}. {registry[node.type].exportNote || 'Static content and styles are supported.'}</p>
     <div className="property-divider" /><h3>Order in parent</h3><div className="order-actions"><button disabled={location.index === 0} onClick={() => onReorder(node.id, location.index - 1)}>↑ Move up</button><button disabled={location.index >= siblingCount - 1} onClick={() => onReorder(node.id, location.index + 1)}>↓ Move down</button></div><button className="remove-node" onClick={() => onRemove(node.id)}>Remove selected node</button>
