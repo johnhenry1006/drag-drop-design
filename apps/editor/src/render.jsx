@@ -16,8 +16,23 @@ const renderers = {
   icon: (node, content, common) => <svg {...common} className="builder-icon" viewBox="0 0 24 24" role="img" aria-label={node.props.name} style={{ '--icon-size': `${node.props.size}px`, '--icon-color': node.props.color }}><path d={iconPaths[node.props.icon]} /></svg>,
   list: (node, content, common) => React.createElement(node.props.mode === 'ordered' ? 'ol' : 'ul', { ...common, className: 'builder-list' }, node.props.items.map(item => <li key={item.id}>{item.text}</li>)),
   table: (node, content, common) => <div {...common} className="builder-table-scroll" role="region" aria-label={node.props.caption || 'Table'} tabIndex={0}><table>{node.props.caption && <caption>{node.props.caption}</caption>}<thead><tr>{node.props.columns.map(column => <th key={column.id} scope="col">{column.label}</th>)}</tr></thead><tbody>{node.props.rows.map(row => <tr key={row.id}>{node.props.columns.map(column => <td key={column.id}>{row.cells[column.id]}</td>)}</tr>)}</tbody></table></div>,
-  tooltip: (node, content, common) => <TooltipNode node={node} common={common} />
+  tooltip: (node, content, common) => <TooltipNode node={node} common={common} />,
+  checkbox: (node, content, common) => <ControlNode node={node} common={common} />,
+  radio: (node, content, common) => <ControlNode node={node} common={common} />,
+  switch: (node, content, common) => <ControlNode node={node} common={common} />,
+  toggle: (node, content, common) => <ControlNode node={node} common={common} />
 };
+
+function ControlNode({ node, common }) {
+  const p = node.props;
+  const editing = Boolean(common.onClick);
+  const [value, setValue] = useState(node.type === 'Radio Group' ? p.defaultValue : node.type === 'Toggle Button' ? p.defaultPressed : p.defaultChecked);
+  const disabled = editing || p.disabled;
+  if (node.type === 'Radio Group') return <fieldset {...common} className="builder-radio" disabled={!editing && p.disabled} data-disabled={p.disabled ? 'true' : undefined}><legend>{p.label}</legend>{p.options.map(option => <label key={option.id}><input type="radio" name={p.name} value={option.value} checked={(editing ? p.defaultValue : value) === option.value} required={p.required} disabled={disabled} onChange={() => setValue(option.value)} /><span>{option.label}</span></label>)}</fieldset>;
+  if (node.type === 'Toggle Button') { const pressed = editing ? p.defaultPressed : value; return <span {...common} className="builder-toggle" data-pressed={pressed ? 'true' : 'false'} data-disabled={p.disabled ? 'true' : undefined}><button type="button" name={p.name} aria-pressed={pressed} disabled={disabled} onClick={() => setValue(current => !current)}>{p.label}</button></span>; }
+  const checked = editing ? p.defaultChecked : value;
+  return <span {...common} className={node.type === 'Switch' ? 'builder-switch' : 'builder-checkbox'} data-disabled={p.disabled ? 'true' : undefined}><label><input type="checkbox" role={node.type === 'Switch' ? 'switch' : undefined} name={p.name} checked={checked} required={p.required} disabled={disabled} onChange={event => setValue(event.target.checked)} /><span>{p.label}</span></label></span>;
+}
 
 function TooltipNode({ node, common }) {
   const [open, setOpen] = useState(false);

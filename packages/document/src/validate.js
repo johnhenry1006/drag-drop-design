@@ -5,7 +5,8 @@ import { iconIds } from './icons.js';
 
 const plain = value => value !== null && typeof value === 'object' && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 const identifier = value => typeof value === 'string' && /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(value);
-const newTypes = new Set(['Avatar', 'Badge', 'Chip', 'Icons', 'Lists', 'Table', 'Tooltip']);
+const newTypes = new Set(['Avatar', 'Badge', 'Chip', 'Icons', 'Lists', 'Table', 'Tooltip', 'Checkbox', 'Radio Group', 'Switch', 'Toggle Button']);
+const controlTypes = new Set(['Checkbox', 'Radio Group', 'Switch', 'Toggle Button']);
 const stringField = (value, max = 200) => typeof value === 'string' && value.length <= max;
 const integerField = (value, min, max) => Number.isInteger(value) && value >= min && value <= max;
 const colorField = value => typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value);
@@ -14,6 +15,7 @@ const uniqueIds = values => values.every(plain) && new Set(values.map(value => v
 const validItems = value => Array.isArray(value) && value.length <= 100 && uniqueIds(value) && value.every(item => exactKeys(item, ['id', 'text']) && identifier(item.id) && stringField(item.text, 1000));
 const validColumns = value => Array.isArray(value) && value.length >= 1 && value.length <= 20 && uniqueIds(value) && value.every(column => exactKeys(column, ['id', 'label']) && identifier(column.id) && stringField(column.label, 200) && column.label.trim());
 const validRows = value => Array.isArray(value) && value.length <= 100 && uniqueIds(value) && value.every(row => exactKeys(row, ['id', 'cells']) && identifier(row.id) && plain(row.cells) && Object.values(row.cells).every(cell => stringField(cell, 1000)));
+const validOptions = value => Array.isArray(value) && value.length >= 1 && value.length <= 50 && uniqueIds(value) && value.every(option => exactKeys(option, ['id', 'label', 'value']) && identifier(option.id) && stringField(option.label, 200) && option.label.trim() && stringField(option.value, 100) && option.value.trim()) && new Set(value.map(option => option.value)).size === value.length;
 
 function validNewProp(type, key, value) {
   if (type === 'Avatar') {
@@ -41,6 +43,13 @@ function validNewProp(type, key, value) {
     return key === 'columns' ? validColumns(value) : validRows(value);
   }
   if (type === 'Tooltip') return key === 'placement' ? ['top', 'bottom', 'left', 'right'].includes(value) : stringField(value, 500) && Boolean(value.trim());
+  if (controlTypes.has(type)) {
+    if (key === 'name') return typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(value);
+    if (key === 'label') return stringField(value, 200) && Boolean(value.trim());
+    if (key === 'disabled' || key === 'required' || key === 'defaultChecked' || key === 'defaultPressed') return typeof value === 'boolean';
+    if (key === 'options') return validOptions(value);
+    if (key === 'defaultValue') return stringField(value, 100) && Boolean(value.trim());
+  }
   return false;
 }
 
@@ -83,7 +92,7 @@ function validateAdvancedCss(value, path) {
   }
 }
 
-function validateNode(node, path, ids) {
+function validateNode(node, path, ids, fieldNames) {
   if (!plain(node) || !registry[node.type]) throw new Error(`${path} has an unknown node type`);
   if (!identifier(node.id) || regions.includes(node.id) || ids.has(node.id)) throw new Error(`${path} has an invalid or duplicate ID`);
   ids.add(node.id);
@@ -110,13 +119,18 @@ function validateNode(node, path, ids) {
       if (Object.keys(row.cells).length !== columnIds.length || columnIds.some(id => !Object.hasOwn(row.cells, id))) throw new Error(`${path}.props.rows[${index}].cells must match columns`);
     }
   }
+  if (node.type === 'Radio Group' && !node.props.options.some(option => option.value === node.props.defaultValue)) throw new Error(`${path}.props.defaultValue must match an option`);
+  if (controlTypes.has(node.type)) {
+    if (fieldNames.has(node.props.name)) throw new Error(`${path}.props.name duplicates another field`);
+    fieldNames.add(node.props.name);
+  }
   validateStyles(node.styles, path);
   validateAdvancedCss(node.advancedCss, path);
   if (registry[node.type].kind === 'container') {
     if (!Array.isArray(node.children)) throw new Error(`${path}.children must be an array`);
     node.children.forEach((child, index) => {
       if (!registry[node.type].children.includes(child?.type)) throw new Error(`${path}.children[${index}] is not allowed`);
-      validateNode(child, `${path}.children[${index}]`, ids);
+      validateNode(child, `${path}.children[${index}]`, ids, fieldNames);
     });
   } else if ('children' in node) throw new Error(`${path} cannot have children`);
 }
@@ -129,9 +143,10 @@ export function validateDocument(document) {
   validateStyles(document.styles, 'Page');
   if (!plain(document.regions) || Object.keys(document.regions).some(key => !regions.includes(key))) throw new Error('Page.regions is invalid');
   const ids = new Set([document.id]);
+  const fieldNames = new Set();
   for (const region of regions) {
     if (!Array.isArray(document.regions[region])) throw new Error(`Page.regions.${region} must be an array`);
-    document.regions[region].forEach((node, index) => validateNode(node, `Page.regions.${region}[${index}]`, ids));
+    document.regions[region].forEach((node, index) => validateNode(node, `Page.regions.${region}[${index}]`, ids, fieldNames));
   }
   return document;
 }
