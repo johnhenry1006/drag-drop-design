@@ -24,8 +24,19 @@ const renderers = {
   rating: (node, content, common) => <RangeNode node={node} common={common} />,
   slider: (node, content, common) => <RangeNode node={node} common={common} />,
   autocomplete: (node, content, common) => <AutocompleteNode node={node} common={common} />,
-  transfer: (node, content, common) => <TransferNode node={node} common={common} />
+  transfer: (node, content, common) => <TransferNode node={node} common={common} />,
+  fab: (node, content, common) => <FabNode node={node} common={common} />
 };
+
+function FabNode({ node, common }) {
+  const p = node.props;
+  const editing = Boolean(common.onClick);
+  const { onNavigate, ...domCommon } = common;
+  const attributes = { ...domCommon, className: 'builder-fab', 'data-corner': p.corner, 'data-shape': p.shape, 'data-edit': editing ? 'true' : undefined, 'data-visible-desktop': String(p.visibleDesktop), 'data-visible-tablet': String(p.visibleTablet), 'data-visible-mobile': String(p.visibleMobile), 'aria-label': editing ? common['aria-label'] : p.label, title: p.label, style: { '--fab-offset': `${p.offset}px` } };
+  const icon = <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d={iconPaths[p.icon]} /></svg>;
+  if (p.action === 'link') return <a {...attributes} href={p.href} rel={p.href.startsWith('https://') ? 'noopener noreferrer' : undefined} onClick={event => { if (editing) { common.onClick(event); return; } if (onNavigate && p.href.startsWith('/')) { event.preventDefault(); onNavigate(p.href); } }}>{icon}</a>;
+  return <button {...attributes} type="button" onClick={event => { if (editing) { common.onClick(event); return; } const stage = event.currentTarget.closest('.preview-stage'); (stage || window).scrollTo({ top: 0, behavior: 'smooth' }); }}>{icon}</button>;
+}
 
 function TransferNode({ node, common }) {
   const p = node.props;
@@ -128,14 +139,14 @@ function RegionView({ region, nodes, selectedId, onSelect, dropTarget }) {
   }, nodes.map(node => <NodeView key={node.id} node={node} selectedId={selectedId} onSelect={onSelect} dropTarget={dropTarget} depth={0} />));
 }
 
-export function PageView({ document, selectedId, onSelect, dropTarget, breakpoint = 'desktop', interactive = true }) {
+export function PageView({ document, selectedId, onSelect, onNavigate, dropTarget, breakpoint = 'desktop', interactive = true }) {
   return <div className="page" data-node-id={document.id} data-breakpoint={breakpoint}>
     <style>{documentCss(document, undefined, breakpoint)}</style>
-    {interactive ? regions.map(region => <RegionView key={region} region={region} nodes={document.regions[region]} selectedId={selectedId} onSelect={onSelect} dropTarget={dropTarget} />) : regions.map(region => React.createElement(region, { key: region, className: `page-region region-${region}` }, document.regions[region].map(node => <StaticNodeView key={node.id} node={node} />)))}
+    {interactive ? regions.map(region => <RegionView key={region} region={region} nodes={document.regions[region]} selectedId={selectedId} onSelect={onSelect} dropTarget={dropTarget} />) : regions.map(region => React.createElement(region, { key: region, className: `page-region region-${region}` }, document.regions[region].map(node => <StaticNodeView key={node.id} node={node} onNavigate={onNavigate} />)))}
   </div>;
 }
 
-function StaticNodeView({ node }) {
-  const content = node.children?.map(child => <StaticNodeView key={child.id} node={child} />);
-  return renderers[registry[node.type].renderer](node, content, { 'data-node-id': node.id });
+function StaticNodeView({ node, onNavigate }) {
+  const content = node.children?.map(child => <StaticNodeView key={child.id} node={child} onNavigate={onNavigate} />);
+  return renderers[registry[node.type].renderer](node, content, { 'data-node-id': node.id, ...(node.type === 'Floating Action Button' ? { onNavigate } : {}) });
 }

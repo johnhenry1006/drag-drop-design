@@ -14,6 +14,7 @@ export const paletteItems = [
   { key: 'Icons', label: 'Icons', group: 'Media', icon: '★' },
   { key: 'Navigation', label: 'Navigation', group: 'Navigation', icon: '☷' },
   { key: 'Link', label: 'Link', group: 'Navigation', icon: '↗' },
+  { key: 'Floating Action Button', label: 'Floating Action Button', group: 'Navigation', icon: '◉' },
   { key: 'Card', label: 'Card', group: 'Content', icon: '▢' },
   { key: 'Badge', label: 'Badge', group: 'Content', icon: '●' },
   { key: 'Chip', label: 'Chip', group: 'Content', icon: '◖' },

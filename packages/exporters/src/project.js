@@ -3,6 +3,7 @@ import { documentCss, normalizePagePath, regions, registry, supportedStyles, val
 import { avatarFallbackScript, classFor, componentCss, contentCss, controlRuntimeScript, escapeHtml, formCss, htmlRegions, jsxRegions, packageFile, rangeCss, rangeRuntimeScript, reactControlComponents, reactRangeComponents, reactTooltipComponent, tooltipRuntimeScript, vueControlComponents, vueRangeComponents, vueRegions, vueTooltipComponent } from './index.js';
 import { autocompleteCss, autocompleteRuntimeScript, reactAutocompleteComponent, vueAutocompleteComponent } from './autocomplete.js';
 import { transferCss, transferRuntimeScript, reactTransferComponent, vueTransferComponent } from './transfer.js';
+import { fabCss, fabRuntimeScript } from './fab.js';
 
 const targets = new Set(['html', 'react', 'vue']);
 const mediaExtensions = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
@@ -75,7 +76,7 @@ export function analyzeProjectExport(target, pages, assets = []) {
           issues.push(issue(page, node, 'src', `Image source ${src || '(empty)'} cannot be bundled`));
         }
       }
-      if (node.type === 'Button' || node.type === 'Link') {
+      if (node.type === 'Button' || node.type === 'Link' || (node.type === 'Floating Action Button' && node.props.action === 'link')) {
         const href = node.props.href;
         if (href.startsWith('//') || href.includes('\\')) issues.push(issue(page, node, 'href', `Unsafe link URL ${href}`));
         else if (href.startsWith('/')) {
@@ -117,7 +118,7 @@ function urlMapper(target, page, assetsById) {
 }
 
 const baseCss = '*{box-sizing:border-box}html,body,#app{margin:0;min-height:100%}a{text-decoration:none}.region-footer{background:#172b58}.page-region{min-height:75px}\n';
-const projectCss = pages => baseCss + componentCss + contentCss + formCss + rangeCss + autocompleteCss + transferCss + pages.map(page => {
+const projectCss = pages => baseCss + componentCss + contentCss + formCss + rangeCss + autocompleteCss + transferCss + fabCss + pages.map(page => {
   const scope = `.${pageClass(page)}`;
   return `${scope}{background:#fff;max-width:1440px;margin:0 auto}${documentCss(page.document, id => id === page.document.id ? scope : `${scope} .${classFor(id)}`)}`;
 }).join('\n');
@@ -127,7 +128,7 @@ const readme = (target, pages) => `# Exported ${target.toUpperCase()} project\n\
 function htmlScripts() {
   return {
     'package.json': JSON.stringify({ name: 'builder-html-export', private: true, version: '1.0.0', type: 'module', scripts: { dev: 'node server.js', build: 'node build.js', preview: 'node server.js dist' } }, null, 2) + '\n',
-    'build.js': `import { cp, mkdir, readdir } from 'node:fs/promises';\nawait mkdir('dist', { recursive: true });\nfor (const entry of await readdir('.', { withFileTypes: true })) {\n  if (entry.name === 'dist' || entry.name === 'node_modules') continue;\n  if (entry.name === 'assets' || entry.name === 'styles.css' || entry.name === 'avatar.js' || entry.name === 'tooltip.js' || entry.name === 'controls.js' || entry.name === 'autocomplete.js' || entry.name === 'transfer.js' || entry.name === 'index.html' || entry.isDirectory()) await cp(entry.name, 'dist/' + entry.name, { recursive: true });\n}\nconsole.log('Built HTML project in dist/');\n`,
+    'build.js': `import { cp, mkdir, readdir } from 'node:fs/promises';\nawait mkdir('dist', { recursive: true });\nfor (const entry of await readdir('.', { withFileTypes: true })) {\n  if (entry.name === 'dist' || entry.name === 'node_modules') continue;\n  if (entry.name === 'assets' || entry.name === 'styles.css' || entry.name === 'avatar.js' || entry.name === 'tooltip.js' || entry.name === 'controls.js' || entry.name === 'autocomplete.js' || entry.name === 'transfer.js' || entry.name === 'fab.js' || entry.name === 'index.html' || entry.isDirectory()) await cp(entry.name, 'dist/' + entry.name, { recursive: true });\n}\nconsole.log('Built HTML project in dist/');\n`,
     'server.js': `import { createServer } from 'node:http';\nimport { readFile, stat } from 'node:fs/promises';\nimport { resolve, sep } from 'node:path';\nconst root = resolve(process.argv[2] || '.');\nconst types = { '.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8', '.png':'image/png', '.jpg':'image/jpeg', '.gif':'image/gif', '.webp':'image/webp' };\ncreateServer(async (request, response) => {\n  try {\n    const pathname = decodeURIComponent(new URL(request.url, 'http://localhost').pathname);\n    const path = resolve(root, '.' + pathname);\n    if (path !== root && !path.startsWith(root + sep)) throw new Error('Forbidden');\n    const info = await stat(path).catch(() => null);\n    const file = info?.isDirectory() ? resolve(path, 'index.html') : info ? path : resolve(path, 'index.html');\n    const data = await readFile(file);\n    const extension = file.slice(file.lastIndexOf('.'));\n    response.writeHead(200, { 'Content-Type': types[extension] || 'application/octet-stream' }); response.end(data);\n  } catch { response.writeHead(404); response.end('Not found'); }\n}).listen(4173, '127.0.0.1', () => console.log('http://127.0.0.1:4173'));\n`
   };
 }
@@ -144,13 +145,14 @@ export function buildProjectFiles(target, pages, assets = []) {
     files['controls.js'] = controlRuntimeScript + rangeRuntimeScript;
     files['autocomplete.js'] = autocompleteRuntimeScript;
     files['transfer.js'] = transferRuntimeScript;
+    files['fab.js'] = fabRuntimeScript;
     files['README.md'] = readme(target, pages);
     files['styles.css'] = projectCss(pages);
     for (const page of pages) {
       const scope = pageClass(page);
       const cssHref = relativeUrl(page.path, 'styles.css');
       const markup = htmlRegions(page.document, urlMapper(target, page, assetsById));
-      files[pageFile(page.path)] = `<!doctype html>\n<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(page.document.props.title)}</title><link rel="stylesheet" href="${escapeHtml(cssHref)}"><script src="${escapeHtml(relativeUrl(page.path, 'avatar.js'))}" defer></script><script src="${escapeHtml(relativeUrl(page.path, 'tooltip.js'))}" defer></script><script src="${escapeHtml(relativeUrl(page.path, 'controls.js'))}" defer></script><script src="${escapeHtml(relativeUrl(page.path, 'autocomplete.js'))}" defer></script><script src="${escapeHtml(relativeUrl(page.path, 'transfer.js'))}" defer></script></head><body><div class="${scope}">${markup}</div></body></html>\n`;
+      files[pageFile(page.path)] = `<!doctype html>\n<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(page.document.props.title)}</title><link rel="stylesheet" href="${escapeHtml(cssHref)}"><script src="${escapeHtml(relativeUrl(page.path, 'avatar.js'))}" defer></script><script src="${escapeHtml(relativeUrl(page.path, 'tooltip.js'))}" defer></script><script src="${escapeHtml(relativeUrl(page.path, 'controls.js'))}" defer></script><script src="${escapeHtml(relativeUrl(page.path, 'autocomplete.js'))}" defer></script><script src="${escapeHtml(relativeUrl(page.path, 'transfer.js'))}" defer></script><script src="${escapeHtml(relativeUrl(page.path, 'fab.js'))}" defer></script></head><body><div class="${scope}">${markup}</div></body></html>\n`;
     }
     if (!pages.some(page => page.path === '/')) files['index.html'] = `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Pages</title></head><body><main><h1>Pages</h1><ul>${pages.map(page => `<li><a href=".${escapeHtml(page.path)}/">${escapeHtml(page.name)}</a></li>`).join('')}</ul></main></body></html>\n`;
   } else if (target === 'react') {

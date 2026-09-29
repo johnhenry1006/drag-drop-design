@@ -5,7 +5,7 @@ import { iconIds } from './icons.js';
 
 const plain = value => value !== null && typeof value === 'object' && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 const identifier = value => typeof value === 'string' && /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(value);
-const newTypes = new Set(['Avatar', 'Badge', 'Chip', 'Icons', 'Lists', 'Table', 'Tooltip', 'Checkbox', 'Radio Group', 'Switch', 'Toggle Button', 'Rating', 'Slider', 'Autocomplete', 'Transfer List']);
+const newTypes = new Set(['Avatar', 'Badge', 'Chip', 'Icons', 'Lists', 'Table', 'Tooltip', 'Checkbox', 'Radio Group', 'Switch', 'Toggle Button', 'Rating', 'Slider', 'Autocomplete', 'Transfer List', 'Floating Action Button']);
 const controlTypes = new Set(['Checkbox', 'Radio Group', 'Switch', 'Toggle Button', 'Rating', 'Slider', 'Autocomplete']);
 const stringField = (value, max = 200) => typeof value === 'string' && value.length <= max;
 const integerField = (value, min, max) => Number.isInteger(value) && value >= min && value <= max;
@@ -20,6 +20,13 @@ const validAutocompleteOptions = value => Array.isArray(value) && value.length <
 const validTransferOptions = value => validAutocompleteOptions(value) && new Set(value.map(option => option.value)).size === value.length;
 const finiteNumber = value => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= 1000000;
 const aligned = (value, min, step) => Math.abs((value - min) / step - Math.round((value - min) / step)) < 1e-8;
+export const safeFabHref = value => {
+  if (!stringField(value, 2048) || /[\s<>"'`\\]/.test(value)) return false;
+  if (/^\/(?!\/)[A-Za-z0-9/_?&=.%+-]*$/.test(value)) return true;
+  if (!value.startsWith('https://')) return false;
+  try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password && !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && !url.hostname.endsWith('.localhost'); }
+  catch { return false; }
+};
 
 function validNewProp(type, key, value) {
   if (type === 'Avatar') {
@@ -59,6 +66,17 @@ function validNewProp(type, key, value) {
     if (key === 'defaultRightIds') return Array.isArray(value) && value.length <= 100 && value.every(identifier) && new Set(value).size === value.length;
     if (key === 'disabled') return typeof value === 'boolean';
     return stringField(value, 200) && Boolean(value.trim());
+  }
+  if (type === 'Floating Action Button') {
+    if (key === 'icon') return iconIds.includes(value);
+    if (key === 'label') return stringField(value, 200) && Boolean(value.trim());
+    if (key === 'action') return ['scrollTop', 'link'].includes(value);
+    if (key === 'href') return value === '' || safeFabHref(value);
+    if (key === 'corner') return ['topLeft', 'topRight', 'bottomLeft', 'bottomRight'].includes(value);
+    if (key === 'offset') return integerField(value, 16, 120);
+    if (key === 'shape') return ['circle', 'rounded', 'square'].includes(value);
+    if (key.startsWith('visible')) return typeof value === 'boolean';
+    return false;
   }
   if (type === 'Rating' || type === 'Slider') {
     if (key === 'name') return typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(value);
@@ -148,6 +166,7 @@ function validateNode(node, path, ids, fieldNames) {
   if (node.type === 'Radio Group' && !node.props.options.some(option => option.value === node.props.defaultValue)) throw new Error(`${path}.props.defaultValue must match an option`);
   if (node.type === 'Autocomplete' && node.props.defaultOptionId && !node.props.options.some(option => option.id === node.props.defaultOptionId)) throw new Error(`${path}.props.defaultOptionId must match an option ID`);
   if (node.type === 'Transfer List' && node.props.defaultRightIds.some(id => !node.props.options.some(option => option.id === id))) throw new Error(`${path}.props.defaultRightIds must reference existing option IDs`);
+  if (node.type === 'Floating Action Button' && (node.props.action === 'link' ? !safeFabHref(node.props.href) : node.props.href !== '')) throw new Error(`${path}.props.href must match the selected action`);
   if (node.type === 'Rating' && (node.props.step > node.props.items || node.props.items % node.props.step !== 0 || node.props.defaultValue < 0 || node.props.defaultValue > node.props.items || !aligned(node.props.defaultValue, 0, node.props.step))) throw new Error(`${path}.props rating score must be within 0..items and aligned to step`);
   if (node.type === 'Slider' && (node.props.min > node.props.max || node.props.defaultValue < node.props.min || node.props.defaultValue > node.props.max || !aligned(node.props.defaultValue, node.props.min, node.props.step))) throw new Error(`${path}.props slider range or initial value is invalid`);
   if (controlTypes.has(node.type)) {
