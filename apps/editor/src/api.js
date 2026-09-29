@@ -7,6 +7,7 @@ export async function api(path, options = {}) {
     const error = new Error(payload.error || `API returned ${response.status}`);
     error.status = response.status;
     error.currentRevision = payload.currentRevision;
+    error.references = payload.references;
     throw error;
   }
   return payload;
