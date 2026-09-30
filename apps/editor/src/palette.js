@@ -3,10 +3,19 @@ import { registry } from '@builder/document';
 export const paletteItems = Object.entries(registry).flatMap(([key, definition]) => {
   const palette = definition.palette;
   if (!palette) return [];
-  return [{ key, label: palette.label || key, group: palette.group, icon: palette.icon, order: palette.order },
-    ...(palette.variants || []).map(variant => ({ ...variant, group: palette.group }))];
+  return [{ key, label: palette.label || key, group: palette.group, icon: palette.icon, order: palette.order, keywords: palette.keywords || [] },
+    ...(palette.variants || []).map(variant => ({ ...variant, group: palette.group, keywords: variant.keywords || [] }))];
 }).sort((left, right) => left.order - right.order);
 export const paletteGroups = [...new Set(paletteItems.map(item => item.group))];
+
+export function searchPaletteItems(query) {
+  const words = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return paletteItems;
+  return paletteItems.filter(item => {
+    const terms = `${item.label} ${item.key} ${item.keywords.join(' ')}`.toLocaleLowerCase();
+    return words.every(word => terms.includes(word));
+  });
+}
 
 const styles = desktop => ({ desktop, tablet: {}, mobile: {} });
 const id = () => `node_${crypto.randomUUID().replaceAll('-', '')}`;

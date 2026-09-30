@@ -4,7 +4,8 @@ import { DragDropProvider, useDraggable, useDroppable } from '@dnd-kit/react';
 import { pointerIntersection } from '@dnd-kit/collision';
 import { addNode, findNode, getAncestors, normalizePagePath, regions, registry, removeNode, reorderNode, samplePage, updateNode, validateDocument } from '@builder/document';
 import { applyDrop, placementFromPointer } from './drop.js';
-import { createPaletteNode, paletteGroups, paletteItems } from './palette.js';
+import { createPaletteNode, paletteGroups, searchPaletteItems } from './palette.js';
+import { readCollapsedPaletteGroups, writeCollapsedPaletteGroups } from './palette-preferences.js';
 import { emptyHistory, recordChange, travel } from './history.js';
 import { PageView } from './render.jsx';
 import { PropertiesPanel } from './properties.jsx';
@@ -26,22 +27,28 @@ function PaletteButton({ item, onAdd }) {
 
 function ElementsPanel({ onAdd, suggestionRegion, onSuggest, onInsertSuggestion }) {
   const [query, setQuery] = useState('');
-  const [expandedGroups, setExpandedGroups] = useState(() => new Set(paletteGroups));
-  const matches = paletteItems.filter(item => `${item.label} ${item.group}`.toLowerCase().includes(query.trim().toLowerCase()));
-  const toggleGroup = group => setExpandedGroups(previous => { const next = new Set(previous); if (next.has(group)) next.delete(group); else next.add(group); return next; });
+  const [collapsedGroups, setCollapsedGroups] = useState(readCollapsedPaletteGroups);
+  const [searchCollapsedGroups, setSearchCollapsedGroups] = useState(() => new Set());
+  const searching = Boolean(query.trim());
+  const matches = searchPaletteItems(query);
+  useEffect(() => { writeCollapsedPaletteGroups(collapsedGroups); }, [collapsedGroups]);
+  const toggleGroup = group => {
+    const setGroups = searching ? setSearchCollapsedGroups : setCollapsedGroups;
+    setGroups(previous => { const next = new Set(previous); if (next.has(group)) next.delete(group); else next.add(group); return next; });
+  };
   return <div className="panel-scroll"><div className="panel-heading"><span className="panel-kicker">BUILD</span><h2>Elements</h2><p>Drag onto the canvas or select a target and click to add.</p></div>
-    <label className="palette-search"><span>Search elements</span><input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search elements…" /></label>
+    <label className="palette-search"><span>Search elements</span><input type="search" value={query} onChange={event => { setQuery(event.target.value); setSearchCollapsedGroups(new Set()); }} placeholder="Search elements…" /></label>
     {paletteGroups.map(group => {
       const items = matches.filter(item => item.group === group);
-      if (query && !items.length) return null;
-      const open = expandedGroups.has(group);
+      if (searching && !items.length) return null;
+      const open = searching ? !searchCollapsedGroups.has(group) : !collapsedGroups.has(group);
       const listId = `palette-group-${group.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
       return <section className="palette-group" key={group}><h3><button type="button" className="palette-disclosure" aria-expanded={open} aria-controls={listId} onClick={() => toggleGroup(group)}><span className="palette-chevron" aria-hidden="true">▸</span><span>{group}</span><span className="palette-count" aria-hidden="true">{items.length}</span></button></h3><div id={listId} hidden={!open}>{items.map(item => <div key={item.key}><PaletteButton item={item} onAdd={onAdd} />{registry[item.key]?.exportNote && <p className="palette-support">HTML5, React, Vue · {registry[item.key].exportNote}</p>}</div>)}</div></section>;
     })}
-    {query && matches.length === 0 && <p className="palette-no-results">No matching elements.</p>}
-    <section className="suggestion-panel" aria-label="Layout suggestions"><h3>Layout suggestions</h3><p>Optional starting points. Every inserted node stays editable.</p><div className="suggestion-regions">{regions.map(region => <button key={region} className={suggestionRegion === region ? 'active' : ''} onClick={() => onSuggest(region)}>{region}</button>)}</div>
+    {searching && matches.length === 0 && <p className="palette-no-results" role="status">No elements match “{query.trim()}”. Try an element name or another keyword.</p>}
+    {!searching && <section className="suggestion-panel" aria-label="Layout suggestions"><h3>Layout suggestions</h3><p>Optional starting points. Every inserted node stays editable.</p><div className="suggestion-regions">{regions.map(region => <button key={region} className={suggestionRegion === region ? 'active' : ''} onClick={() => onSuggest(region)}>{region}</button>)}</div>
       {layoutSuggestions.filter(item => item.region === suggestionRegion).map(item => <button className="suggestion-item" key={item.key} onClick={() => onInsertSuggestion(item.key, suggestionRegion)}><strong>{item.label}</strong><span>{item.description}</span></button>)}
-    </section>
+    </section>}
   </div>;
 }
 
