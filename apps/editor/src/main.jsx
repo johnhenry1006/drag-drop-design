@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { DragDropProvider, useDraggable, useDroppable } from '@dnd-kit/react';
 import { pointerIntersection } from '@dnd-kit/collision';
-import { addNode, findNode, getAncestors, normalizePagePath, regions, registry, removeNode, reorderNode, samplePage, updateNode, validateDocument } from '@builder/document';
+import { addNode, findNode, getAncestors, normalizePagePath, regions, registry, removeNode, reorderNode, updateNode, validateDocument } from '@builder/document';
 import { applyDrop, placementFromPointer } from './drop.js';
 import { createPaletteNode, paletteGroups, searchPaletteItems } from './palette.js';
 import { readCollapsedPaletteGroups, writeCollapsedPaletteGroups } from './palette-preferences.js';
@@ -315,11 +315,6 @@ function App() {
         const { projects: available } = await api('/projects');
         setProjects(available);
         if (available.length) await openProject(available.find(project => project.id === window.localStorage.getItem('builder:lastProjectId')) || available.find(project => project.id === '00000000-0000-4000-8000-000000000001') || available[0]);
-        else if (!auth.enabled) {
-          const project = (await api('/projects', jsonOptions('POST', { name: 'Sample project' }))).project;
-          const page = (await api(`/projects/${project.id}/pages`, jsonOptions('POST', { name: 'Sample page', document: samplePage }))).page;
-          setProjects([project]); setCurrentProject(project); await refreshPages(project.id); activatePage(page);
-        }
       } catch (cause) { setError(cause.message); }
     })();
   }, [auth?.enabled, auth?.user?.id]);

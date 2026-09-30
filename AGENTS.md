@@ -19,3 +19,7 @@
 
 - Implement changes in small, reviewable increments. After each change, run relevant checks and report changed files, commands run, results, and remaining limitations.
 - Add meaningful tests for risky behavior, including tree moves, responsive CSS, and exported projects. Avoid tests that merely mirror the implementation.
+
+## Sample page preservation
+
+- Do not delete, replace, blank out, or hide existing sample pages or their required assets as part of feature work or cleanup unless the user explicitly requests that removal. Keep their stable page IDs, project ownership, hierarchy, content, styles, and internal links. A generic instruction to refactor, add CRUD, remove unused code, or build production is not authorization to remove sample pages. This applies to developer actions and automatic scripts; it does not disable the application's authorized CRUD deletion flow.

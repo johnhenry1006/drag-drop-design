@@ -5,7 +5,7 @@ import { linkNode, normalizePagePath, samplePage, validateDocument } from '@buil
 import { pool } from './db.js';
 import { assetBucket, assetStorageMode, deleteObject, getObject, putObject } from './object-store.js';
 
-const migrations = ['001_baseline', '002_accounts_storage', '003_asset_bucket', '004_project_management', '005_page_hierarchy'].map((name, index) => ({ version: index + 1, path: fileURLToPath(new URL(`./migrations/${name}.sql`, import.meta.url)) }));
+const migrations = ['001_baseline', '002_accounts_storage', '003_asset_bucket', '004_project_management', '005_page_hierarchy', '006_sample_seed_state'].map((name, index) => ({ version: index + 1, path: fileURLToPath(new URL(`./migrations/${name}.sql`, import.meta.url)) }));
 export const assetUrl = id => `/api/assets/${id}/content`;
 
 export const sampleProjectId = '00000000-0000-4000-8000-000000000001';
@@ -16,8 +16,8 @@ export async function migrate() {
   try {
     await client.query('SELECT pg_advisory_lock(83140721)');
     await client.query('CREATE TABLE IF NOT EXISTS schema_migrations (version integer PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())');
-    const latest = (await client.query('SELECT max(version) AS version FROM schema_migrations')).rows[0].version;
-    if (latest > migrations.at(-1).version) throw new Error(`Database schema version ${latest} is newer than this API`);
+    const priorVersion = (await client.query('SELECT max(version) AS version FROM schema_migrations')).rows[0].version;
+    if (priorVersion > migrations.at(-1).version) throw new Error(`Database schema version ${priorVersion} is newer than this API`);
     for (const migration of migrations) {
       if ((await client.query('SELECT 1 FROM schema_migrations WHERE version=$1', [migration.version])).rowCount) continue;
       await client.query('BEGIN');
@@ -27,11 +27,22 @@ export async function migrate() {
         await client.query('COMMIT');
       } catch (error) { await client.query('ROLLBACK'); throw error; }
     }
-    if (process.env.NODE_ENV !== 'production') {
-      await client.query('INSERT INTO projects(id,name) VALUES($1,$2) ON CONFLICT(id) DO NOTHING', [sampleProjectId, 'Sample project']);
-      await client.query('INSERT INTO pages(id,project_id,name,path,document,slug,sort_order) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7) ON CONFLICT(id) DO NOTHING', [samplePageId, sampleProjectId, 'Sample page', '/', JSON.stringify(samplePage), 'home', 0]);
-      await client.query('INSERT INTO page_revisions(page_id,revision,document) VALUES($1,1,$2::jsonb) ON CONFLICT(page_id,revision) DO NOTHING', [samplePageId, JSON.stringify(samplePage)]);
-    }
+    await client.query('BEGIN');
+    try {
+      const recorded = await client.query('SELECT status FROM sample_seed_state WHERE sample_page_id=$1', [samplePageId]);
+      if (!recorded.rowCount) {
+        const existing = await client.query('SELECT 1 FROM pages WHERE id=$1 AND project_id=$2', [samplePageId, sampleProjectId]);
+        let status = existing.rowCount ? 'present' : 'absent';
+        if (!existing.rowCount && priorVersion === null && process.env.NODE_ENV !== 'production') {
+          await client.query('INSERT INTO projects(id,name) VALUES($1,$2)', [sampleProjectId, 'Sample project']);
+          await client.query('INSERT INTO pages(id,project_id,name,path,document,slug,sort_order) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7)', [samplePageId, sampleProjectId, 'Sample page', '/', JSON.stringify(samplePage), 'home', 0]);
+          await client.query('INSERT INTO page_revisions(page_id,revision,document) VALUES($1,1,$2::jsonb)', [samplePageId, JSON.stringify(samplePage)]);
+          status = 'present';
+        }
+        await client.query('INSERT INTO sample_seed_state(sample_page_id,status) VALUES($1,$2)', [samplePageId, status]);
+      }
+      await client.query('COMMIT');
+    } catch (error) { await client.query('ROLLBACK'); throw error; }
   } finally {
     await client.query('SELECT pg_advisory_unlock(83140721)');
     client.release();
@@ -87,6 +98,7 @@ export async function deleteProject(id, name, expectedVersion, expectedCounts) {
       const shared = await client.query('SELECT 1 FROM assets WHERE project_id<>$1 AND object_bucket=$2 AND object_key=$3 LIMIT 1', [id, object.bucket, object.key]);
       if (!shared.rowCount) await client.query('INSERT INTO asset_object_deletions(object_bucket,object_key) VALUES($1,$2) ON CONFLICT DO NOTHING', [object.bucket, object.key]);
     }
+    if (id === sampleProjectId) await client.query('UPDATE sample_seed_state SET status=$2,updated_at=now() WHERE sample_page_id=$1', [samplePageId, 'deleted']);
     await client.query('DELETE FROM projects WHERE id=$1', [id]);
     await client.query('COMMIT');
     return { deleted: true, counts };
@@ -335,6 +347,7 @@ export async function deletePage(id, expectedRevision, mode, destinationParentPa
         parentChanges.set(child.id, destinationParentPageId);
       }
     }
+    if (removed.has(samplePageId)) await client.query('UPDATE sample_seed_state SET status=$2,updated_at=now() WHERE sample_page_id=$1', [samplePageId, 'deleted']);
     await client.query('DELETE FROM pages WHERE id=ANY($1::uuid[])', [[...removed]]);
     const survivors = rows.filter(row => !removed.has(row.id));
     const finalGroups = siblingGroups(survivors);
