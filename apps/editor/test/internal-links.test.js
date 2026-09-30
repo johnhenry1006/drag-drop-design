@@ -9,7 +9,7 @@ import { findNode, samplePage, updateNode } from '@builder/document';
 import { analyzeProjectExport } from '@builder/exporters/project';
 import { pool } from '../../api/src/db.js';
 
-const base = 'http://127.0.0.1:3001/api';
+const base = process.env.API_BASE || 'http://127.0.0.1:3001/api';
 const json = (method, body) => ({ method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 async function request(path, options) {
   const response = await fetch(base + path, options);
@@ -43,6 +43,13 @@ test('page-ID links resolve after route edits in Preview and three built ZIPs', 
     const rejected = await fetch(base + `/pages/${root.id}`, json('PUT', { expectedRevision: root.revision, document: invalid }));
     assert.equal(rejected.status, 409);
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    if (process.env.API_BASE) await page.route('**/api/**', async route => {
+      const target = new URL(route.request().url());
+      const source = new URL(base);
+      target.host = source.host;
+      const response = await route.fetch({ url: target.toString() });
+      await route.fulfill({ response });
+    });
     await page.goto(process.env.EDITOR_URL || 'http://127.0.0.1:5173/');
     await page.getByRole('combobox', { name: 'Project' }).selectOption(project.id);
     await page.getByRole('combobox', { name: 'Page' }).selectOption(root.id);
