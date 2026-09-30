@@ -1,7 +1,7 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { normalizePagePath, samplePage, validateDocument } from '@builder/document';
+import { linkNode, normalizePagePath, samplePage, validateDocument } from '@builder/document';
 import { pool } from './db.js';
 import { assetBucket, assetStorageMode, deleteObject, getObject, putObject } from './object-store.js';
 
@@ -137,6 +137,7 @@ export async function createPage(projectId, name, document, path, parentPageId =
     if (!(await client.query('SELECT id FROM projects WHERE id=$1 FOR UPDATE', [projectId])).rowCount) throw Object.assign(new Error('Project not found'), { statusCode: 404 });
     const parent = parentPageId === null ? null : (await client.query('SELECT id,path FROM pages WHERE id=$1 AND project_id=$2', [parentPageId, projectId])).rows[0];
     if (parentPageId !== null && !parent) throw badRequest('Parent page must be in this project');
+    await assertPageTargets(client, projectId, pageDocument);
     const defaultSlug = path === undefined ? pageName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'page' : slugFromPath(validPath(path));
     const pageSlug = validSlug(slug === undefined ? defaultSlug : slug);
     const pagePath = validPath(path === undefined ? parent ? `${parent.path === '/' ? '' : parent.path}/${pageSlug}` : (await client.query('SELECT 1 FROM pages WHERE project_id=$1 AND path=\'/\'', [projectId])).rowCount ? `/${pageSlug}` : '/' : path);
@@ -158,6 +159,15 @@ function visitDocumentNodes(document, visit) {
 function internalPath(href) {
   if (typeof href !== 'string' || !href.startsWith('/') || href.startsWith('//')) return null;
   return href.split(/[?#]/, 1)[0];
+}
+async function assertPageTargets(client, projectId, document) {
+  const targets = new Set();
+  visitDocumentNodes(document, node => { if (linkNode(node) && node.props.targetPageId) targets.add(node.props.targetPageId); });
+  if (!targets.size) return;
+  const found = (await client.query('SELECT id FROM pages WHERE project_id=$1 AND id=ANY($2::uuid[])', [projectId, [...targets]])).rows;
+  const available = new Set(found.map(row => row.id));
+  const missing = [...targets].filter(id => !available.has(id));
+  if (missing.length) throw conflict(`Target pages are missing or inaccessible in this project: ${missing.join(', ')}`);
 }
 function rewriteDocumentLinks(document, oldPath, newPath) {
   const copy = structuredClone(document);
@@ -196,6 +206,7 @@ export async function savePage(id, expectedRevision, document, name, path, slug,
     const current = (await client.query(`SELECT ${pageColumns} FROM pages WHERE id=$1 FOR UPDATE`, [id])).rows[0];
     if (!current || current.revision !== expectedRevision) { await client.query('ROLLBACK'); return { page: null, current }; }
     let pageDocument = validDocument(document === undefined ? current.document : document);
+    await assertPageTargets(client, current.projectId, pageDocument);
     const nextPath = pagePath ?? current.path;
     if (nextPath !== current.path) pageDocument = validDocument(rewriteDocumentLinks(pageDocument, current.path, nextPath).document);
     if (requireValidLinks) {
@@ -203,7 +214,7 @@ export async function savePage(id, expectedRevision, document, name, path, slug,
       paths.add(nextPath);
       const missing = new Set();
       visitDocumentNodes(pageDocument, node => {
-        if (!['Button', 'Link', 'Floating Action Button'].includes(node.type) || (node.type === 'Floating Action Button' && node.props.action !== 'link')) return;
+        if (!linkNode(node)) return;
         const route = internalPath(node.props.href);
         if (route && !paths.has(route)) missing.add(route);
       });
@@ -251,6 +262,23 @@ function descendantIds(rows, id) {
   visit(id);
   return found;
 }
+function inboundReferences(rows, removed) {
+  const removedPaths = new Set(rows.filter(row => removed.has(row.id)).map(row => row.path));
+  const references = [];
+  for (const row of rows.filter(item => !removed.has(item.id))) visitDocumentNodes(row.document, node => {
+    if (!linkNode(node)) return;
+    if (removed.has(node.props.targetPageId) || removedPaths.has(internalPath(node.props.href))) references.push({ pageId: row.id, nodeId: node.id, href: node.props.href, targetPageId: node.props.targetPageId || null });
+  });
+  return references;
+}
+export async function pageInboundReferences(id, mode = 'subtree') {
+  if (!['subtree', 'reparent'].includes(mode)) throw badRequest('mode must be subtree or reparent');
+  const identity = (await pool.query('SELECT project_id FROM pages WHERE id=$1', [id])).rows[0];
+  if (!identity) return null;
+  const rows = (await pool.query('SELECT id,parent_page_id AS "parentPageId",path,document FROM pages WHERE project_id=$1', [identity.project_id])).rows;
+  const removed = mode === 'subtree' ? descendantIds(rows, id) : new Set([id]);
+  return { affectedPageIds: [...removed], references: inboundReferences(rows, removed) };
+}
 
 export async function movePage(id, expectedRevision, parentPageId, index) {
   if (!Number.isInteger(expectedRevision) || expectedRevision < 1 || !Number.isInteger(index) || index < 0 || parentPageId === undefined) throw badRequest('expectedRevision, parentPageId, and a nonnegative index are required');
@@ -295,12 +323,7 @@ export async function deletePage(id, expectedRevision, mode, destinationParentPa
     if (mode === 'reparent' && destinationParentPageId === undefined) throw badRequest('Select a destination parent, or null for root');
     if (mode === 'reparent' && destinationParentPageId !== null && !rows.some(row => row.id === destinationParentPageId)) throw badRequest('Destination parent must be in this project');
     if (mode === 'reparent' && subtree.has(destinationParentPageId)) throw badRequest('Destination parent cannot be inside the deleted page subtree');
-    const removedPaths = new Set(rows.filter(row => removed.has(row.id)).map(row => row.path));
-    const references = [];
-    for (const row of rows.filter(item => !removed.has(item.id))) visitDocumentNodes(row.document, node => {
-      if (!['Button', 'Link', 'Floating Action Button'].includes(node.type) || (node.type === 'Floating Action Button' && node.props.action !== 'link')) return;
-      if (removedPaths.has(internalPath(node.props.href))) references.push({ pageId: row.id, nodeId: node.id, href: node.props.href });
-    });
+    const references = inboundReferences(rows, removed);
     if (references.length) { await client.query('ROLLBACK'); return { references }; }
     const parentChanges = new Map();
     if (mode === 'reparent') {

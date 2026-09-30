@@ -1,5 +1,5 @@
 import { posix } from 'node:path';
-import { documentCss, normalizePagePath, regions, registry, supportedStyles, validateDocument } from '@builder/document';
+import { documentCss, linkNode, normalizePagePath, regions, registry, resolveLinkHref, supportedStyles, validateDocument } from '@builder/document';
 import { avatarFallbackScript, classFor, componentCss, contentCss, controlRuntimeScript, escapeHtml, formCss, htmlRegions, jsxRegions, packageFile, rangeCss, rangeRuntimeScript, reactControlComponents, reactRangeComponents, reactTooltipComponent, tooltipRuntimeScript, vueControlComponents, vueRangeComponents, vueRegions, vueTooltipComponent } from './index.js';
 import { autocompleteCss, autocompleteRuntimeScript, reactAutocompleteComponent, vueAutocompleteComponent } from './autocomplete.js';
 import { transferCss, transferRuntimeScript, reactTransferComponent, vueTransferComponent } from './transfer.js';
@@ -48,6 +48,8 @@ export function analyzeProjectExport(target, pages, assets = []) {
   if (!targets.has(target)) return [{ pagePath: null, nodeId: null, property: 'target', message: `Unknown export target ${target}` }];
   if (!Array.isArray(pages) || !pages.length) return [{ pagePath: null, nodeId: null, property: 'pages', message: 'Project has no pages' }];
   const paths = new Set();
+  const pageIds = new Set(pages.map(page => page.id));
+  if (pageIds.size !== pages.length) issues.push({ pagePath: null, nodeId: null, property: 'pages', message: 'Duplicate page IDs prevent reliable internal link resolution' });
   for (const page of pages) {
     try { normalizePagePath(page.path); }
     catch (error) { issues.push(issue(page, null, 'path', error.message)); continue; }
@@ -76,7 +78,8 @@ export function analyzeProjectExport(target, pages, assets = []) {
           issues.push(issue(page, node, 'src', `Image source ${src || '(empty)'} cannot be bundled`));
         }
       }
-      if (node.type === 'Button' || node.type === 'Link' || (node.type === 'Floating Action Button' && node.props.action === 'link')) {
+      if (linkNode(node)) {
+        if (node.props.targetPageId && !pageIds.has(node.props.targetPageId)) { issues.push(issue(page, node, 'targetPageId', `Target page ${node.props.targetPageId} is missing or inaccessible`)); return; }
         const href = node.props.href;
         if (href.startsWith('//') || href.includes('\\')) issues.push(issue(page, node, 'href', `Unsafe link URL ${href}`));
         else if (href.startsWith('/')) {
@@ -94,8 +97,8 @@ function relativeUrl(fromPagePath, targetFile) {
   return relative.startsWith('.') ? relative : `./${relative}`;
 }
 
-function urlMapper(target, page, assetsById) {
-  return (value, node, property) => {
+function urlMapper(target, page, pages, assetsById) {
+  const mapper = (value, node, property) => {
     if (property === 'src') {
       const match = assetPattern.exec(value);
       if (!match) return value;
@@ -103,6 +106,7 @@ function urlMapper(target, page, assetsById) {
       const file = `assets/${asset.id}.${mediaExtensions[asset.mediaType]}`;
       return target === 'html' ? relativeUrl(page.path, file) : `./${file}`;
     }
+    if (property === 'href' && node.props.targetPageId) value = resolveLinkHref(node, pages);
     if (value.startsWith('/') && !value.startsWith('//')) {
       const route = hrefRoute(value);
       const suffix = value.slice(value.split(/[?#]/, 1)[0].length);
@@ -115,6 +119,8 @@ function urlMapper(target, page, assetsById) {
     }
     return value;
   };
+  mapper.includeNodeIds = true;
+  return mapper;
 }
 
 const baseCss = '*{box-sizing:border-box}html,body,#app{margin:0;min-height:100%}a{text-decoration:none}.region-footer{background:#172b58}.page-region{min-height:75px}\n';
@@ -151,7 +157,7 @@ export function buildProjectFiles(target, pages, assets = []) {
     for (const page of pages) {
       const scope = pageClass(page);
       const cssHref = relativeUrl(page.path, 'styles.css');
-      const markup = htmlRegions(page.document, urlMapper(target, page, assetsById));
+      const markup = htmlRegions(page.document, urlMapper(target, page, pages, assetsById));
       files[pageFile(page.path)] = `<!doctype html>\n<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(page.document.props.title)}</title><link rel="stylesheet" href="${escapeHtml(cssHref)}"><script src="${escapeHtml(relativeUrl(page.path, 'avatar.js'))}" defer></script><script src="${escapeHtml(relativeUrl(page.path, 'tooltip.js'))}" defer></script><script src="${escapeHtml(relativeUrl(page.path, 'controls.js'))}" defer></script><script src="${escapeHtml(relativeUrl(page.path, 'autocomplete.js'))}" defer></script><script src="${escapeHtml(relativeUrl(page.path, 'transfer.js'))}" defer></script><script src="${escapeHtml(relativeUrl(page.path, 'fab.js'))}" defer></script></head><body><div class="${scope}">${markup}</div></body></html>\n`;
     }
     if (!pages.some(page => page.path === '/')) files['index.html'] = `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Pages</title></head><body><main><h1>Pages</h1><ul>${pages.map(page => `<li><a href=".${escapeHtml(page.path)}/">${escapeHtml(page.name)}</a></li>`).join('')}</ul></main></body></html>\n`;
@@ -160,23 +166,23 @@ export function buildProjectFiles(target, pages, assets = []) {
     files['README.md'] = readme(target, pages);
     files['index.html'] = '<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base href="/"><title>Exported site</title></head><body><div id="app"></div><script type="module" src="/src/main.jsx"></script></body></html>\n';
     files['src/styles.css'] = projectCss(pages);
-    files['src/pages.jsx'] = `import React from 'react';\nimport TooltipControl from './tooltip.jsx';\nimport AutocompleteControl from './autocomplete.jsx';\nimport TransferControl from './transfer.jsx';\nimport {CheckboxControl,RadioControl,SwitchControl,ToggleControl,RatingControl,SliderControl} from './controls.jsx';\nexport const pages = [${pages.map(page => `{path:${JSON.stringify(page.path)},title:${JSON.stringify(page.document.props.title)},render:()=> <div className=${JSON.stringify(pageClass(page))}>${jsxRegions(page.document, urlMapper(target, page, assetsById))}</div>}`).join(',')}];\n`;
+    files['src/pages.jsx'] = `import React from 'react';\nimport TooltipControl from './tooltip.jsx';\nimport AutocompleteControl from './autocomplete.jsx';\nimport TransferControl from './transfer.jsx';\nimport {CheckboxControl,RadioControl,SwitchControl,ToggleControl,RatingControl,SliderControl} from './controls.jsx';\nexport const pages = [${pages.map(page => `{path:${JSON.stringify(page.path)},title:${JSON.stringify(page.document.props.title)},render:()=> <div className=${JSON.stringify(pageClass(page))}>${jsxRegions(page.document, urlMapper(target, page, pages, assetsById))}</div>}`).join(',')}];\n`;
     files['src/tooltip.jsx'] = reactTooltipComponent;
     files['src/controls.jsx'] = reactControlComponents + reactRangeComponents;
     files['src/autocomplete.jsx'] = reactAutocompleteComponent;
     files['src/transfer.jsx'] = reactTransferComponent;
-    files['src/main.jsx'] = `import React, { useEffect, useState } from 'react';\nimport { createRoot } from 'react-dom/client';\nimport { pages } from './pages.jsx';\nimport './styles.css';\nconst route = () => window.location.pathname.replace(/\\/$/, '') || '/';\nfunction App(){const [path,setPath]=useState(route);useEffect(()=>{const update=()=>setPath(route());window.addEventListener('popstate',update);return()=>window.removeEventListener('popstate',update)},[]);const page=pages.find(item=>item.path===path);useEffect(()=>{document.title=page?.title||'Not found'},[page]);const navigate=event=>{const anchor=event.target.closest('a[href]');if(!anchor)return;const url=new URL(anchor.href);if(url.origin!==window.location.origin||!pages.some(item=>item.path===(url.pathname.replace(/\\/$/,'')||'/')))return;event.preventDefault();window.history.pushState({},'',url.pathname+url.search+url.hash);setPath(route())};return <div onClick={navigate}>{page?page.render():<main><h1>Page not found</h1><a href="/">Home</a></main>}</div>}\ncreateRoot(document.getElementById('app')).render(<App />);\n`;
+    files['src/main.jsx'] = `import React, { useEffect, useState } from 'react';\nimport { createRoot } from 'react-dom/client';\nimport { pages } from './pages.jsx';\nimport './styles.css';\nconst route = () => window.location.pathname.replace(/\\/$/, '') || '/';\nfunction App(){const [path,setPath]=useState(route);useEffect(()=>{const update=()=>setPath(route());window.addEventListener('popstate',update);return()=>window.removeEventListener('popstate',update)},[]);const page=pages.find(item=>item.path===path);useEffect(()=>{document.title=page?.title||'Not found'},[page]);const navigate=event=>{const anchor=event.target.closest('a[href]');if(!anchor)return;const url=new URL(anchor.href);if(url.origin!==window.location.origin||!pages.some(item=>item.path===(url.pathname.replace(/\\/$/,'')||'/')))return;event.preventDefault();window.history.pushState({},'',url.pathname+url.search+url.hash);setPath(route());if(url.hash)requestAnimationFrame(()=>requestAnimationFrame(()=>document.getElementById(decodeURIComponent(url.hash.slice(1)))?.scrollIntoView()))};return <div onClick={navigate}>{page?page.render():<main><h1>Page not found</h1><a href="/">Home</a></main>}</div>}\ncreateRoot(document.getElementById('app')).render(<App />);\n`;
   } else {
     files['package.json'] = packageFile('builder-vue-export', { vue: '^3.5.0', vite: '^6.3.0' });
     files['README.md'] = readme(target, pages);
     files['index.html'] = '<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base href="/"><title>Exported site</title></head><body><div id="app"></div><script type="module" src="/src/main.js"></script></body></html>\n';
     files['src/styles.css'] = projectCss(pages);
-    files['src/pages.js'] = `import { h } from 'vue';\nimport TooltipControl from './tooltip.js';\nimport AutocompleteControl from './autocomplete.js';\nimport TransferControl from './transfer.js';\nimport {CheckboxControl,RadioControl,SwitchControl,ToggleControl,RatingControl,SliderControl} from './controls.js';\nexport const pages = [${pages.map(page => `{path:${JSON.stringify(page.path)},title:${JSON.stringify(page.document.props.title)},render:()=>h('div',{class:${JSON.stringify(pageClass(page))}},[${vueRegions(page.document, urlMapper(target, page, assetsById))}])}`).join(',')}];\n`;
+    files['src/pages.js'] = `import { h } from 'vue';\nimport TooltipControl from './tooltip.js';\nimport AutocompleteControl from './autocomplete.js';\nimport TransferControl from './transfer.js';\nimport {CheckboxControl,RadioControl,SwitchControl,ToggleControl,RatingControl,SliderControl} from './controls.js';\nexport const pages = [${pages.map(page => `{path:${JSON.stringify(page.path)},title:${JSON.stringify(page.document.props.title)},render:()=>h('div',{class:${JSON.stringify(pageClass(page))}},[${vueRegions(page.document, urlMapper(target, page, pages, assetsById))}])}`).join(',')}];\n`;
     files['src/tooltip.js'] = vueTooltipComponent;
     files['src/controls.js'] = vueControlComponents + vueRangeComponents;
     files['src/autocomplete.js'] = vueAutocompleteComponent;
     files['src/transfer.js'] = vueTransferComponent;
-    files['src/main.js'] = `import { createApp, h, ref, onMounted, onUnmounted, watch } from 'vue';\nimport { pages } from './pages.js';\nimport './styles.css';\nconst route=()=>window.location.pathname.replace(/\\/$/,'')||'/';\ncreateApp({setup(){const path=ref(route());const update=()=>{path.value=route()};onMounted(()=>window.addEventListener('popstate',update));onUnmounted(()=>window.removeEventListener('popstate',update));watch(path,()=>{document.title=pages.find(item=>item.path===path.value)?.title||'Not found'},{immediate:true});const navigate=event=>{const anchor=event.target.closest('a[href]');if(!anchor)return;const url=new URL(anchor.href);if(url.origin!==window.location.origin||!pages.some(item=>item.path===(url.pathname.replace(/\\/$/,'')||'/')))return;event.preventDefault();window.history.pushState({},'',url.pathname+url.search+url.hash);update()};return()=>h('div',{onClick:navigate},[pages.find(item=>item.path===path.value)?.render()||h('main',[h('h1','Page not found'),h('a',{href:'/'},'Home')])])}}).mount('#app');\n`;
+    files['src/main.js'] = `import { createApp, h, ref, onMounted, onUnmounted, watch } from 'vue';\nimport { pages } from './pages.js';\nimport './styles.css';\nconst route=()=>window.location.pathname.replace(/\\/$/,'')||'/';\ncreateApp({setup(){const path=ref(route());const update=()=>{path.value=route()};onMounted(()=>window.addEventListener('popstate',update));onUnmounted(()=>window.removeEventListener('popstate',update));watch(path,()=>{document.title=pages.find(item=>item.path===path.value)?.title||'Not found'},{immediate:true});const navigate=event=>{const anchor=event.target.closest('a[href]');if(!anchor)return;const url=new URL(anchor.href);if(url.origin!==window.location.origin||!pages.some(item=>item.path===(url.pathname.replace(/\\/$/,'')||'/')))return;event.preventDefault();window.history.pushState({},'',url.pathname+url.search+url.hash);update();if(url.hash)requestAnimationFrame(()=>requestAnimationFrame(()=>document.getElementById(decodeURIComponent(url.hash.slice(1)))?.scrollIntoView()))};return()=>h('div',{onClick:navigate},[pages.find(item=>item.path===path.value)?.render()||h('main',[h('h1','Page not found'),h('a',{href:'/'},'Home')])])}}).mount('#app');\n`;
   }
   const referenced = new Set(referencedAssetIds(pages));
   for (const asset of assets) {

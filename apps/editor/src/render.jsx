@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { documentCss, iconPaths, regions, registry } from '@builder/document';
+import { documentCss, iconPaths, regions, registry, resolveLinkHref } from '@builder/document';
 import { useDroppable } from '@dnd-kit/react';
 import { pointerIntersection } from '@dnd-kit/collision';
 
@@ -9,7 +9,11 @@ const renderers = {
   heading: (node, content, common) => React.createElement(`h${node.props.level || 2}`, common, node.props.text),
   text: (node, content, common) => React.createElement('p', common, node.props.text),
   image: (node, content, common) => React.createElement('img', { ...common, src: node.props.src, alt: node.props.alt }),
-  button: (node, content, common) => React.createElement('a', { ...common, href: node.props.href }, node.props.text),
+  button: (node, content, common) => {
+    const { onNavigate, resolveHref, ...attributes } = common;
+    const href = resolveHref(node);
+    return <a {...attributes} href={href || undefined} aria-disabled={href === null ? true : undefined} onClick={event => { if (common.onClick) { common.onClick(event); return; } if (onNavigate && href?.startsWith('/')) { event.preventDefault(); onNavigate(href); } }}>{node.props.text}</a>;
+  },
   avatar: (node, content, common) => <span {...common} className="builder-avatar" data-shape={node.props.shape} role="img" aria-label={node.props.alt || node.props.name} style={{ '--avatar-size': `${node.props.size}px` }}><span aria-hidden="true">{node.props.initials || node.props.name?.split(/\s+/).map(word => word[0]).slice(0, 2).join('').toUpperCase()}</span>{node.props.src && <img key={node.props.src} src={node.props.src} alt="" aria-hidden="true" onError={event => { event.currentTarget.hidden = true; }} />}</span>,
   badge: (node, content, common) => <span {...common} className="builder-badge" data-placement={node.props.placement} style={{ '--badge-color': node.props.color }}><span>{node.props.content}</span><span className="builder-badge-mark" aria-label={node.props.text || (node.props.maxCount > 0 && node.props.count > node.props.maxCount ? `${node.props.maxCount} plus` : String(node.props.count))}>{node.props.text || (node.props.maxCount > 0 && node.props.count > node.props.maxCount ? `${node.props.maxCount}+` : node.props.count)}</span></span>,
   chip: (node, content, common) => <span {...common} className="builder-chip">{node.props.icon && <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d={iconPaths[node.props.icon]} /></svg>}<span>{node.props.label}</span></span>,
@@ -31,10 +35,11 @@ const renderers = {
 function FabNode({ node, common }) {
   const p = node.props;
   const editing = Boolean(common.onClick);
-  const { onNavigate, ...domCommon } = common;
+  const { onNavigate, resolveHref, ...domCommon } = common;
+  const href = p.action === 'link' ? resolveHref(node) : null;
   const attributes = { ...domCommon, className: 'builder-fab', 'data-corner': p.corner, 'data-shape': p.shape, 'data-edit': editing ? 'true' : undefined, 'data-visible-desktop': String(p.visibleDesktop), 'data-visible-tablet': String(p.visibleTablet), 'data-visible-mobile': String(p.visibleMobile), 'aria-label': editing ? common['aria-label'] : p.label, title: p.label, style: { '--fab-offset': `${p.offset}px` } };
   const icon = <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d={iconPaths[p.icon]} /></svg>;
-  if (p.action === 'link') return <a {...attributes} href={p.href} rel={p.href.startsWith('https://') ? 'noopener noreferrer' : undefined} onClick={event => { if (editing) { common.onClick(event); return; } if (onNavigate && p.href.startsWith('/')) { event.preventDefault(); onNavigate(p.href); } }}>{icon}</a>;
+  if (p.action === 'link') return <a {...attributes} href={href || undefined} aria-disabled={href === null ? true : undefined} rel={href?.startsWith('https://') ? 'noopener noreferrer' : undefined} onClick={event => { if (editing) { common.onClick(event); return; } if (onNavigate && href?.startsWith('/')) { event.preventDefault(); onNavigate(href); } }}>{icon}</a>;
   return <button {...attributes} type="button" onClick={event => { if (editing) { common.onClick(event); return; } const stage = event.currentTarget.closest('.preview-stage'); (stage || window).scrollTo({ top: 0, behavior: 'smooth' }); }}>{icon}</button>;
 }
 
@@ -110,11 +115,13 @@ function TooltipNode({ node, common }) {
   return <span {...common} className="builder-tooltip" data-placement={node.props.placement} data-open={open ? 'true' : undefined} data-touched={touched ? 'true' : undefined} data-edit={editing ? 'true' : undefined} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) { setOpen(false); setTouched(false); } }}><button type="button" aria-describedby={`tip-${node.id}`} aria-expanded={open} onClick={event => { if (editing) { common.onClick(event); return; } setTouched(true); setOpen(value => !value); }} onKeyDown={event => { if (event.key === 'Escape') { setOpen(false); setTouched(false); event.currentTarget.blur(); } }}>{node.props.trigger}</button><span id={`tip-${node.id}`} role="tooltip" className="builder-tooltip-content">{node.props.content}</span></span>;
 }
 
-function NodeView({ node, selectedId, onSelect, dropTarget, depth }) {
+function NodeView({ node, selectedId, onSelect, dropTarget, depth, resolveHref }) {
   const { ref } = useDroppable({ id: `canvas-node:${node.id}`, accept: ['palette', 'tree-node'], collisionDetector: pointerIntersection, collisionPriority: depth + 2 });
-  const content = node.children?.map(child => <NodeView key={child.id} node={child} selectedId={selectedId} onSelect={onSelect} dropTarget={dropTarget} depth={depth + 1} />);
+  const content = node.children?.map(child => <NodeView key={child.id} node={child} selectedId={selectedId} onSelect={onSelect} dropTarget={dropTarget} depth={depth + 1} resolveHref={resolveHref} />);
   const common = {
     ref,
+    id: node.id,
+    ...(['Button', 'Link', 'Floating Action Button'].includes(node.type) ? { resolveHref } : {}),
     'data-node-id': node.id,
     'data-selected': selectedId === node.id ? 'true' : undefined,
     'data-drop': dropTarget?.targetId === `canvas-node:${node.id}` && dropTarget.valid ? dropTarget.placement : undefined,
@@ -128,7 +135,7 @@ function NodeView({ node, selectedId, onSelect, dropTarget, depth }) {
   return renderers[registry[node.type].renderer](node, content, common);
 }
 
-function RegionView({ region, nodes, selectedId, onSelect, dropTarget }) {
+function RegionView({ region, nodes, selectedId, onSelect, dropTarget, resolveHref }) {
   const { ref } = useDroppable({ id: `canvas-region:${region}`, accept: ['palette', 'tree-node'], collisionDetector: pointerIntersection, collisionPriority: 1 });
   return React.createElement(region, {
     ref,
@@ -136,17 +143,18 @@ function RegionView({ region, nodes, selectedId, onSelect, dropTarget }) {
     'data-region': region,
     'data-drop': dropTarget?.targetId === `canvas-region:${region}` && dropTarget.valid ? 'inside' : undefined,
     'data-drop-invalid': dropTarget?.targetId === `canvas-region:${region}` && !dropTarget.valid ? 'true' : undefined
-  }, nodes.map(node => <NodeView key={node.id} node={node} selectedId={selectedId} onSelect={onSelect} dropTarget={dropTarget} depth={0} />));
+  }, nodes.map(node => <NodeView key={node.id} node={node} selectedId={selectedId} onSelect={onSelect} dropTarget={dropTarget} depth={0} resolveHref={resolveHref} />));
 }
 
-export function PageView({ document, selectedId, onSelect, onNavigate, dropTarget, breakpoint = 'desktop', interactive = true }) {
+export function PageView({ document, pages = [], selectedId, onSelect, onNavigate, dropTarget, breakpoint = 'desktop', interactive = true }) {
+  const resolveHref = node => resolveLinkHref(node, pages);
   return <div className="page" data-node-id={document.id} data-breakpoint={breakpoint}>
     <style>{documentCss(document, undefined, breakpoint)}</style>
-    {interactive ? regions.map(region => <RegionView key={region} region={region} nodes={document.regions[region]} selectedId={selectedId} onSelect={onSelect} dropTarget={dropTarget} />) : regions.map(region => React.createElement(region, { key: region, className: `page-region region-${region}` }, document.regions[region].map(node => <StaticNodeView key={node.id} node={node} onNavigate={onNavigate} />)))}
+    {interactive ? regions.map(region => <RegionView key={region} region={region} nodes={document.regions[region]} selectedId={selectedId} onSelect={onSelect} dropTarget={dropTarget} resolveHref={resolveHref} />) : regions.map(region => React.createElement(region, { key: region, className: `page-region region-${region}` }, document.regions[region].map(node => <StaticNodeView key={node.id} node={node} onNavigate={onNavigate} resolveHref={resolveHref} />)))}
   </div>;
 }
 
-function StaticNodeView({ node, onNavigate }) {
-  const content = node.children?.map(child => <StaticNodeView key={child.id} node={child} onNavigate={onNavigate} />);
-  return renderers[registry[node.type].renderer](node, content, { 'data-node-id': node.id, ...(node.type === 'Floating Action Button' ? { onNavigate } : {}) });
+function StaticNodeView({ node, onNavigate, resolveHref }) {
+  const content = node.children?.map(child => <StaticNodeView key={child.id} node={child} onNavigate={onNavigate} resolveHref={resolveHref} />);
+  return renderers[registry[node.type].renderer](node, content, { id: node.id, 'data-node-id': node.id, ...(['Button', 'Link', 'Floating Action Button'].includes(node.type) ? { onNavigate, resolveHref } : {}) });
 }

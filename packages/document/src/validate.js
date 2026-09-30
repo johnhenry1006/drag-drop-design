@@ -5,6 +5,8 @@ import { iconIds } from './icons.js';
 
 const plain = value => value !== null && typeof value === 'object' && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 const identifier = value => typeof value === 'string' && /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(value);
+const pageId = value => typeof value === 'string' && (value === '' || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value));
+const anchorId = value => typeof value === 'string' && (value === '' || /^[a-zA-Z][a-zA-Z0-9_-]{0,119}$/.test(value));
 const newTypes = new Set(['Avatar', 'Badge', 'Chip', 'Icons', 'Lists', 'Table', 'Tooltip', 'Checkbox', 'Radio Group', 'Switch', 'Toggle Button', 'Rating', 'Slider', 'Autocomplete', 'Transfer List', 'Floating Action Button']);
 const controlTypes = new Set(['Checkbox', 'Radio Group', 'Switch', 'Toggle Button', 'Rating', 'Slider', 'Autocomplete']);
 const stringField = (value, max = 200) => typeof value === 'string' && value.length <= max;
@@ -72,6 +74,8 @@ function validNewProp(type, key, value) {
     if (key === 'label') return stringField(value, 200) && Boolean(value.trim());
     if (key === 'action') return ['scrollTop', 'link'].includes(value);
     if (key === 'href') return value === '' || safeFabHref(value);
+    if (key === 'targetPageId') return pageId(value);
+    if (key === 'anchor') return anchorId(value);
     if (key === 'corner') return ['topLeft', 'topRight', 'bottomLeft', 'bottomRight'].includes(value);
     if (key === 'offset') return integerField(value, 16, 120);
     if (key === 'shape') return ['circle', 'rounded', 'square'].includes(value);
@@ -145,11 +149,11 @@ function validateNode(node, path, ids, fieldNames) {
   const unsupportedProp = Object.keys(node.props).find(key => !registry[node.type].editable.includes(key));
   if (unsupportedProp) throw new Error(`${path}.props has unsupported property ${unsupportedProp}`);
   if (newTypes.has(node.type)) {
-    const missingProp = registry[node.type].editable.find(key => !Object.hasOwn(node.props, key));
+    const missingProp = registry[node.type].editable.find(key => !['targetPageId', 'anchor'].includes(key) && !Object.hasOwn(node.props, key));
     if (missingProp) throw new Error(`${path}.props.${missingProp} is required`);
   }
   for (const [key, value] of Object.entries(node.props)) {
-    if (newTypes.has(node.type) ? !validNewProp(node.type, key, value) : key === 'level' ? !Number.isInteger(value) || value < 1 || value > 6 : typeof value !== 'string') throw new Error(`${path}.props.${key} is invalid`);
+    if (newTypes.has(node.type) ? !validNewProp(node.type, key, value) : key === 'level' ? !Number.isInteger(value) || value < 1 || value > 6 : key === 'targetPageId' ? !pageId(value) : key === 'anchor' ? !anchorId(value) : typeof value !== 'string') throw new Error(`${path}.props.${key} is invalid`);
     if (key === 'href' && value && !/^(#|\/|https?:\/\/|mailto:|tel:)/i.test(value)) throw new Error(`${path}.props.href has an unsupported URL`);
     if (key === 'src' && value && !/^(\/|https?:\/\/|data:image\/)/i.test(value)) throw new Error(`${path}.props.src has an unsupported URL`);
   }
@@ -166,7 +170,13 @@ function validateNode(node, path, ids, fieldNames) {
   if (node.type === 'Radio Group' && !node.props.options.some(option => option.value === node.props.defaultValue)) throw new Error(`${path}.props.defaultValue must match an option`);
   if (node.type === 'Autocomplete' && node.props.defaultOptionId && !node.props.options.some(option => option.id === node.props.defaultOptionId)) throw new Error(`${path}.props.defaultOptionId must match an option ID`);
   if (node.type === 'Transfer List' && node.props.defaultRightIds.some(id => !node.props.options.some(option => option.id === id))) throw new Error(`${path}.props.defaultRightIds must reference existing option IDs`);
-  if (node.type === 'Floating Action Button' && (node.props.action === 'link' ? !safeFabHref(node.props.href) : node.props.href !== '')) throw new Error(`${path}.props.href must match the selected action`);
+  if (['Button', 'Link', 'Floating Action Button'].includes(node.type)) {
+    const target = node.props.targetPageId || '';
+    const anchor = node.props.anchor || '';
+    if (target && node.props.href) throw new Error(`${path}.props must use either targetPageId or href`);
+    if (anchor && !target) throw new Error(`${path}.props.anchor requires targetPageId`);
+    if (node.type === 'Floating Action Button' && (node.props.action === 'link' ? !target && !safeFabHref(node.props.href) : Boolean(target || anchor || node.props.href))) throw new Error(`${path}.props link must match the selected action`);
+  }
   if (node.type === 'Rating' && (node.props.step > node.props.items || node.props.items % node.props.step !== 0 || node.props.defaultValue < 0 || node.props.defaultValue > node.props.items || !aligned(node.props.defaultValue, 0, node.props.step))) throw new Error(`${path}.props rating score must be within 0..items and aligned to step`);
   if (node.type === 'Slider' && (node.props.min > node.props.max || node.props.defaultValue < node.props.min || node.props.defaultValue > node.props.max || !aligned(node.props.defaultValue, node.props.min, node.props.step))) throw new Error(`${path}.props slider range or initial value is invalid`);
   if (controlTypes.has(node.type)) {

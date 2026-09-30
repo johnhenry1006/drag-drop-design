@@ -7,7 +7,7 @@ import { checkDatabase, pool } from './db.js';
 import { assetContents } from './store.js';
 import { checkObjectStore } from './object-store.js';
 import { authMode, clearCookie, cookie, currentUser, ownsAsset, ownsPage, ownsProject, sessionToken, signIn, signOut } from './auth.js';
-import { createAsset, createPage, createProject, deletePage, deleteProject, drainAssetObjectDeletions, getAsset, getPage, getProject, getRevision, listAssets, listPages, listProjects, listRevisions, migrate, movePage, projectExportAssets, projectExportData, restorePage, savePage, updateProject, validDocument } from './store.js';
+import { createAsset, createPage, createProject, deletePage, deleteProject, drainAssetObjectDeletions, getAsset, getPage, getProject, getRevision, listAssets, listPages, listProjects, listRevisions, migrate, movePage, pageInboundReferences, projectExportAssets, projectExportData, restorePage, savePage, updateProject, validDocument } from './store.js';
 
 export const app = Fastify({ logger: process.env.NODE_ENV !== 'test', bodyLimit: 2 * 1024 * 1024, requestTimeout: 30000, trustProxy: process.env.TRUST_PROXY === 'true' });
 const missing = (reply, kind) => reply.code(404).send({ error: `${kind} not found` });
@@ -137,6 +137,10 @@ app.post('/api/pages/:pageId/move', async (request, reply) => {
   if (result.missing) return missing(reply, 'Page');
   if (result.conflict) return reply.code(409).send({ error: 'Page revision conflict' });
   return { page: result.page };
+});
+app.get('/api/pages/:pageId/references', async (request, reply) => {
+  const result = await pageInboundReferences(uuid(request.params.pageId), request.query?.mode || 'subtree');
+  return result || missing(reply, 'Page');
 });
 app.delete('/api/pages/:pageId', async (request, reply) => {
   const destination = request.body?.destinationParentPageId === undefined ? undefined : request.body.destinationParentPageId === null ? null : uuid(request.body.destinationParentPageId);

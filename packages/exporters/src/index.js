@@ -48,7 +48,7 @@ export function stylesheet(document, selectorFor = id => `.${classFor(id)}`) {
 }
 
 function attributes(node, syntax, transformUrl = value => value) {
-  const attrs = { class: classFor(node.id) };
+  const attrs = { ...(transformUrl.includeNodeIds ? { id: node.id } : {}), class: classFor(node.id) };
   if (node.type === 'Image') { attrs.src = transformUrl(node.props.src, node, 'src'); attrs.alt = node.props.alt; }
   if (node.type === 'Button' || node.type === 'Link') attrs.href = transformUrl(node.props.href, node, 'href');
   if (syntax === 'html') return Object.entries(attrs).map(([key, value]) => ` ${key}="${escapeHtml(value)}"`).join('');
@@ -110,7 +110,7 @@ function vueNode(node, transformUrl = value => value) {
   if (node.type === 'Transfer List') { const p = node.props; return `h(TransferControl,{className:${JSON.stringify(classFor(node.id))},label:${JSON.stringify(p.label)},leftLabel:${JSON.stringify(p.leftLabel)},rightLabel:${JSON.stringify(p.rightLabel)},options:${JSON.stringify(p.options)},initial:${JSON.stringify(p.defaultRightIds)},disabled:${p.disabled}})`; }
   if (node.type === 'Floating Action Button') { const p = node.props; const tag = p.action === 'link' ? 'a' : 'button'; const action = p.action === 'link' ? `href:${JSON.stringify(transformUrl(p.href, node, 'href'))},${p.href.startsWith('https://') ? `rel:'noopener noreferrer',` : ''}` : `type:'button',onClick:()=>window.scrollTo({top:0,behavior:'smooth'}),`; return `h('${tag}',{class:${JSON.stringify(`${classFor(node.id)} builder-fab`)},'data-corner':${JSON.stringify(p.corner)},'data-shape':${JSON.stringify(p.shape)},'data-visible-desktop':${JSON.stringify(String(p.visibleDesktop))},'data-visible-tablet':${JSON.stringify(String(p.visibleTablet))},'data-visible-mobile':${JSON.stringify(String(p.visibleMobile))},style:{'--fab-offset':${JSON.stringify(`${p.offset}px`)}},'aria-label':${JSON.stringify(p.label)},title:${JSON.stringify(p.label)},${action}},[h('svg',{viewBox:'0 0 24 24','aria-hidden':'true',focusable:'false'},[h('path',{d:${JSON.stringify(iconPaths[p.icon])}})])])`; }
   if (['Checkbox', 'Radio Group', 'Switch', 'Toggle Button'].includes(node.type)) { const p = node.props; const component = { Checkbox: 'CheckboxControl', 'Radio Group': 'RadioControl', Switch: 'SwitchControl', 'Toggle Button': 'ToggleControl' }[node.type]; const initial = node.type === 'Radio Group' ? p.defaultValue : node.type === 'Toggle Button' ? p.defaultPressed : p.defaultChecked; return `h(${component},{className:${JSON.stringify(classFor(node.id))},name:${JSON.stringify(p.name)},label:${JSON.stringify(p.label)},initial:${JSON.stringify(initial)},disabled:${p.disabled}${node.type === 'Radio Group' ? `,options:${JSON.stringify(p.options)}` : ''}${Object.hasOwn(p, 'required') ? `,required:${p.required}` : ''}})`; }
-  const props = { class: classFor(node.id) };
+  const props = { ...(transformUrl.includeNodeIds ? { id: node.id } : {}), class: classFor(node.id) };
   if (node.type === 'Image') { props.src = transformUrl(node.props.src, node, 'src'); props.alt = node.props.alt; }
   if (node.type === 'Button' || node.type === 'Link') props.href = transformUrl(node.props.href, node, 'href');
   const children = node.children ? `[${node.children.map(child => vueNode(child, transformUrl)).join(',')}]` : node.type === 'Image' ? 'undefined' : JSON.stringify(node.props.text || '');

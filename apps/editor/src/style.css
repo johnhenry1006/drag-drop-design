@@ -56,6 +56,8 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .page-manager-form label { flex: 1 1 160px; }
 .page-manager-form input, .page-manager-form select { width: 100%; padding: 8px; border: 1px solid #bdc9df; border-radius: 7px; }
 .page-manager-form p { flex-basis: 100%; margin: 2px 0; line-height: 1.5; }
+.page-inbound { flex-basis: 100%; padding: 10px; border: 1px solid #e5adb4; border-radius: 7px; background: #fff3f3; color: #8b2733; }
+.page-inbound ul { margin: 6px 0 0; padding-left: 20px; }
 .navigation-dialog { width: min(470px, 100%); padding: 24px; border-radius: 14px; background: white; box-shadow: 0 20px 60px #10244855; }
 .navigation-dialog h2 { margin-top: 0; }
 .navigation-dialog > div { display: flex; flex-wrap: wrap; gap: 9px; }
