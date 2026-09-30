@@ -18,17 +18,26 @@ const labelFor = node => node.props.label || node.props.text || node.type;
 
 function PaletteButton({ item, onAdd }) {
   const { ref, isDragging } = useDraggable({ id: `palette:${item.key}`, type: 'palette' });
-  return <button ref={ref} className="palette-item" data-palette={item.key} data-dragging={isDragging || undefined} onClick={() => onAdd(item.key)} title={`Click to add ${item.label}; drag to place it`}>
-    <span className="palette-icon">{item.icon}</span><span>{item.label}</span><span className="palette-plus">＋</span>
-  </button>;
+  return <div className="palette-item" data-palette={item.key} data-dragging={isDragging || undefined} title={`Click to add ${item.label}; drag to place it`}>
+    <button ref={ref} type="button" className="palette-item-main" onClick={() => onAdd(item.key)}><span className="palette-icon" aria-hidden="true">{item.icon}</span><span>{item.label}</span></button>
+    <button type="button" className="palette-add" aria-label={`Add ${item.label}`} onClick={() => onAdd(item.key)}>＋</button>
+  </div>;
 }
 
 function ElementsPanel({ onAdd, suggestionRegion, onSuggest, onInsertSuggestion }) {
   const [query, setQuery] = useState('');
+  const [expandedGroups, setExpandedGroups] = useState(() => new Set(paletteGroups));
   const matches = paletteItems.filter(item => `${item.label} ${item.group}`.toLowerCase().includes(query.trim().toLowerCase()));
+  const toggleGroup = group => setExpandedGroups(previous => { const next = new Set(previous); if (next.has(group)) next.delete(group); else next.add(group); return next; });
   return <div className="panel-scroll"><div className="panel-heading"><span className="panel-kicker">BUILD</span><h2>Elements</h2><p>Drag onto the canvas or select a target and click to add.</p></div>
     <label className="palette-search"><span>Search elements</span><input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search elements…" /></label>
-    {paletteGroups.map(group => { const items = matches.filter(item => item.group === group); return <section className="palette-group" key={group}><h3>{group}</h3>{items.map(item => <div key={item.key}><PaletteButton item={item} onAdd={onAdd} />{registry[item.key]?.exportNote && <p className="palette-support">HTML5, React, Vue · {registry[item.key].exportNote}</p>}</div>)}{!items.length && !query && <p className="palette-support">{group === 'Forms' ? 'Form controls and submission are not supported yet.' : group === 'Custom' ? 'Custom code and components are not supported yet.' : 'No elements yet.'}</p>}</section>; })}
+    {paletteGroups.map(group => {
+      const items = matches.filter(item => item.group === group);
+      if (query && !items.length) return null;
+      const open = expandedGroups.has(group);
+      const listId = `palette-group-${group.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+      return <section className="palette-group" key={group}><h3><button type="button" className="palette-disclosure" aria-expanded={open} aria-controls={listId} onClick={() => toggleGroup(group)}><span className="palette-chevron" aria-hidden="true">▸</span><span>{group}</span><span className="palette-count" aria-hidden="true">{items.length}</span></button></h3><div id={listId} hidden={!open}>{items.map(item => <div key={item.key}><PaletteButton item={item} onAdd={onAdd} />{registry[item.key]?.exportNote && <p className="palette-support">HTML5, React, Vue · {registry[item.key].exportNote}</p>}</div>)}</div></section>;
+    })}
     {query && matches.length === 0 && <p className="palette-no-results">No matching elements.</p>}
     <section className="suggestion-panel" aria-label="Layout suggestions"><h3>Layout suggestions</h3><p>Optional starting points. Every inserted node stays editable.</p><div className="suggestion-regions">{regions.map(region => <button key={region} className={suggestionRegion === region ? 'active' : ''} onClick={() => onSuggest(region)}>{region}</button>)}</div>
       {layoutSuggestions.filter(item => item.region === suggestionRegion).map(item => <button className="suggestion-item" key={item.key} onClick={() => onInsertSuggestion(item.key, suggestionRegion)}><strong>{item.label}</strong><span>{item.description}</span></button>)}

@@ -1,35 +1,12 @@
 import { registry } from '@builder/document';
 
-export const paletteGroups = ['Basic', 'Layout', 'Media', 'Navigation', 'Content', 'Forms', 'Custom'];
-export const paletteItems = [
-  { key: 'Heading', label: 'Heading', group: 'Basic', icon: 'H' },
-  { key: 'Text', label: 'Text', group: 'Basic', icon: '¶' },
-  { key: 'Button', label: 'Button', group: 'Basic', icon: '▣' },
-  { key: 'Container', label: 'Container', group: 'Layout', icon: '□' },
-  { key: 'Section', label: 'Section', group: 'Layout', icon: '▤' },
-  { key: 'Layout', label: 'Layout', group: 'Layout', icon: '▥' },
-  { key: 'Columns3', label: '3-column layout', group: 'Layout', icon: '▥' },
-  { key: 'Image', label: 'Image', group: 'Media', icon: '▧' },
-  { key: 'Avatar', label: 'Avatar', group: 'Media', icon: '◉' },
-  { key: 'Icons', label: 'Icons', group: 'Media', icon: '★' },
-  { key: 'Navigation', label: 'Navigation', group: 'Navigation', icon: '☷' },
-  { key: 'Link', label: 'Link', group: 'Navigation', icon: '↗' },
-  { key: 'Floating Action Button', label: 'Floating Action Button', group: 'Navigation', icon: '◉' },
-  { key: 'Card', label: 'Card', group: 'Content', icon: '▢' },
-  { key: 'Badge', label: 'Badge', group: 'Content', icon: '●' },
-  { key: 'Chip', label: 'Chip', group: 'Content', icon: '◖' },
-  { key: 'Lists', label: 'Lists', group: 'Content', icon: '☷' },
-  { key: 'Table', label: 'Table', group: 'Content', icon: '▦' },
-  { key: 'Tooltip', label: 'Tooltip', group: 'Content', icon: '?' },
-  { key: 'Checkbox', label: 'Checkbox', group: 'Forms', icon: '☑' },
-  { key: 'Radio Group', label: 'Radio Group', group: 'Forms', icon: '◉' },
-  { key: 'Switch', label: 'Switch', group: 'Forms', icon: '◖' },
-  { key: 'Toggle Button', label: 'Toggle Button', group: 'Forms', icon: '▣' },
-  { key: 'Rating', label: 'Rating', group: 'Forms', icon: '★' },
-  { key: 'Slider', label: 'Slider', group: 'Forms', icon: '━' },
-  { key: 'Autocomplete', label: 'Autocomplete', group: 'Forms', icon: '⌕' },
-  { key: 'Transfer List', label: 'Transfer List', group: 'Forms', icon: '⇄' }
-];
+export const paletteItems = Object.entries(registry).flatMap(([key, definition]) => {
+  const palette = definition.palette;
+  if (!palette) return [];
+  return [{ key, label: palette.label || key, group: palette.group, icon: palette.icon, order: palette.order },
+    ...(palette.variants || []).map(variant => ({ ...variant, group: palette.group }))];
+}).sort((left, right) => left.order - right.order);
+export const paletteGroups = [...new Set(paletteItems.map(item => item.group))];
 
 const styles = desktop => ({ desktop, tablet: {}, mobile: {} });
 const id = () => `node_${crypto.randomUUID().replaceAll('-', '')}`;
