@@ -6,6 +6,7 @@
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "db:migrate": "node src/migrate.js",
+    "db:seed": "node src/seed-system-samples.js",
     "test": "NODE_ENV=test node --test test/*.test.js",
     "user:create": "node src/create-user.js",
     "assets:backfill": "node src/backfill-assets.js"

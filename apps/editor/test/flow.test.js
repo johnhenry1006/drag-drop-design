@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
+import { deleteEditableSample, openEditableSample } from './editable-sample.js';
 
-const editorUrl = process.env.EDITOR_URL || 'http://127.0.0.1:5173/';
 const browserPath = process.env.CHROME_PATH || '/usr/bin/google-chrome';
 
 async function pageJson(page) {
@@ -26,13 +26,13 @@ async function clickAdd(page, key) {
 
 test('editor flow keeps flexible regions and nested content in Page JSON', async () => {
   const browser = await chromium.launch({ executablePath: browserPath, headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+  let projectId;
   try {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, acceptDownloads: true });
     const page = await context.newPage();
     const pageErrors = [];
     page.on('pageerror', error => pageErrors.push(error.message));
-    await page.goto(editorUrl);
-    await page.getByRole('heading', { name: 'Make room for remarkable.' }).waitFor();
+    projectId = await openEditableSample(page);
 
     await selectRegion(page, 'header');
     await clickAdd(page, 'Navigation');
@@ -121,5 +121,6 @@ test('editor flow keeps flexible regions and nested content in Page JSON', async
     assert.deepEqual(pageErrors, []);
   } finally {
     await browser.close();
+    await deleteEditableSample(projectId);
   }
 });

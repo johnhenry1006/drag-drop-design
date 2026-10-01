@@ -10,6 +10,7 @@
     "dev": "concurrently -k -n api,editor \"npm run dev -w @builder/api\" \"npm run dev -w @builder/editor\"",
     "test": "node --test packages/document/test/*.test.js",
     "test:api": "npm run test -w @builder/api",
+    "db:seed": "npm run db:seed -w @builder/api",
     "test:editor": "node --test --test-concurrency=1 apps/editor/test/*.test.js",
     "build": "npm run build -w @builder/editor",
     "verify:exports": "node scripts/verify-exports.js",

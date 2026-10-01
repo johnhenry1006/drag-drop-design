@@ -4,6 +4,7 @@ import { unzipSync } from 'fflate';
 import { chromium } from 'playwright-core';
 import { pool } from '../apps/api/src/db.js';
 import { samplePageId, sampleProjectId } from '../apps/api/src/store.js';
+import { showcaseAssetId, showcasePageId } from '../apps/api/src/system-samples.js';
 
 const api = process.env.API_URL || 'http://127.0.0.1:3001/api';
 const editor = process.env.EDITOR_URL || 'http://127.0.0.1:5173/';
@@ -12,6 +13,8 @@ try {
   const sample = (await pool.query('SELECT id,project_id,parent_page_id,name,path,slug,sort_order,revision,document,md5(document::text) AS hash FROM pages WHERE id=$1', [samplePageId])).rows[0];
   assert.ok(sample, 'Fixture-identified sample page is missing');
   assert.equal(sample.project_id, sampleProjectId);
+  const templates = (await pool.query('SELECT id,sample_key,fixture_version,revision,document FROM pages WHERE project_id=$1 AND sample_key IS NOT NULL ORDER BY sort_order,id', [sampleProjectId])).rows;
+  assert.deepEqual(templates.map(page => page.id), [samplePageId, showcasePageId]);
   const projectName = (await pool.query('SELECT name FROM projects WHERE id=$1', [sampleProjectId])).rows[0]?.name;
   assert.ok(projectName);
   const nodes = [];
@@ -20,8 +23,8 @@ try {
   assert.ok(sample.document.regions.header.length && sample.document.regions.main.length && sample.document.regions.footer.length);
   const links = nodes.filter(node => ['Button', 'Link', 'Floating Action Button'].includes(node.type) && (node.props.href || node.props.targetPageId));
   const assetRefs = new Set();
-  const revisions = (await pool.query('SELECT document FROM page_revisions WHERE page_id=$1', [samplePageId])).rows;
-  for (const revision of [{ document: sample.document }, ...revisions]) {
+  const revisions = (await pool.query('SELECT document FROM page_revisions WHERE page_id=ANY($1::uuid[])', [templates.map(page => page.id)])).rows;
+  for (const revision of [...templates, ...revisions]) {
     const scan = node => { if (typeof node.props?.src === 'string' && node.props.src.startsWith('/api/assets/')) assetRefs.add(node.props.src); node.children?.forEach(scan); };
     Object.values(revision.document.regions).flat().forEach(scan);
   }
@@ -47,7 +50,7 @@ try {
   await page.getByRole('button', { name: 'Projects', exact: true }).click();
   const projects = page.getByRole('dialog', { name: 'Manage projects' });
   await projects.getByLabel('Search projects').fill(projectName);
-  assert.match(await projects.locator('.project-manager-list li').innerText(), /1 page/);
+  assert.match(await projects.locator('.project-manager-list li').innerText(), /2 pages/);
   await projects.getByRole('button', { name: 'Close projects' }).click();
   await page.getByRole('button', { name: 'Pages', exact: true }).click();
   const pages = page.getByRole('dialog', { name: 'Manage pages' });
@@ -56,8 +59,13 @@ try {
   assert.equal(await sampleRow.getAttribute('aria-selected'), 'true');
   await sampleRow.locator('[data-page-select]').click();
   await pages.getByRole('button', { name: 'Close pages' }).click();
-  assert.equal(await page.locator('.canvas-area [data-node-id="hero_title"]').count(), 1);
-  assert.equal(await page.locator('.canvas-area [data-node-id="footer_grid"]').count(), 1);
+  assert.equal(await page.locator('.preview-stage [data-node-id="hero_title"]').count(), 1);
+  assert.equal(await page.locator('.preview-stage [data-node-id="footer_grid"]').count(), 1);
+  assert.equal(await page.getByRole('button', { name: 'Save', exact: true }).isDisabled(), true);
+  await pageSelect.selectOption(showcasePageId);
+  await page.locator('.preview-stage [data-node-id="showcase_visual"]').waitFor();
+  await pageSelect.selectOption(samplePageId);
+  await page.locator('.preview-stage [data-node-id="hero_title"]').waitFor();
   await page.getByRole('button', { name: 'Preview page' }).click();
   assert.equal(await page.locator('.preview-stage [data-node-id="hero_title"]').count(), 1);
   for (const link of links) if (link.props.href) assert.equal(await page.locator(`.preview-stage [data-node-id="${link.id}"]`).getAttribute('href'), link.props.href);
@@ -76,6 +84,7 @@ try {
     const response = await fetch(`${api}/projects/${sampleProjectId}/exports/${target}.zip`);
     assert.equal(response.status, 200, target);
     const files = unzipSync(new Uint8Array(await response.arrayBuffer()));
+    assert.ok(files[`${target === 'html' ? '' : 'public/'}assets/${showcaseAssetId}.png`], `${target} missing bundled showcase asset`);
     const source = new TextDecoder().decode(files[target === 'html' ? 'index.html' : target === 'react' ? 'src/pages.jsx' : 'src/pages.js']);
     assert.ok(source.includes(sample.document.props.title), `${target} missing page title`);
     assert.ok(source.includes(nodes.find(node => node.id === 'hero_title').props.text), `${target} missing hero title`);

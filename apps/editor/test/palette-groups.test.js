@@ -3,8 +3,8 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
 import { paletteGroups, paletteItems } from '../src/palette.js';
+import { deleteEditableSample, openEditableSample } from './editable-sample.js';
 
-const editorUrl = process.env.EDITOR_URL || 'http://127.0.0.1:5173/';
 
 async function pageJson(page) {
   const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download JSON' }).click()]);
@@ -13,9 +13,10 @@ async function pageJson(page) {
 
 test('palette groups disclose independently without changing add or drag behavior', { timeout: 60000 }, async () => {
   const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || '/usr/bin/google-chrome', headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+  let projectId;
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, acceptDownloads: true });
-    await page.goto(editorUrl);
+    projectId = await openEditableSample(page);
     await page.getByRole('heading', { name: 'Elements' }).waitFor();
     assert.deepEqual(paletteGroups, ['Basic', 'Layout', 'Media', 'Navigation', 'Content', 'Forms']);
     assert.equal(paletteItems.length, 27);
@@ -77,5 +78,5 @@ test('palette groups disclose independently without changing add or drag behavio
     assert.equal(await page.locator('.left-sidebar .panel-scroll').evaluate(element => element.scrollHeight > element.clientHeight), true);
     assert.equal(await page.locator('.canvas-area').isVisible(), true);
     await page.close();
-  } finally { await browser.close(); }
+  } finally { await browser.close(); await deleteEditableSample(projectId); }
 });

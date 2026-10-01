@@ -6,7 +6,7 @@ import { analyzeProjectExport, buildProjectFiles, referencedAssetIds } from '@bu
 import { checkDatabase, pool } from './db.js';
 import { assetContents } from './store.js';
 import { checkObjectStore } from './object-store.js';
-import { authMode, clearCookie, cookie, currentUser, ownsAsset, ownsPage, ownsProject, sessionToken, signIn, signOut } from './auth.js';
+import { authMode, canViewAsset, canViewPage, canViewProject, clearCookie, cookie, currentUser, sessionToken, signIn, signOut } from './auth.js';
 import { createAsset, createPage, createProject, deletePage, deleteProject, drainAssetObjectDeletions, getAsset, getPage, getProject, getRevision, listAssets, listPages, listProjects, listRevisions, migrate, movePage, pageInboundReferences, projectExportAssets, projectExportData, restorePage, savePage, updateProject, validDocument } from './store.js';
 
 export const app = Fastify({ logger: process.env.NODE_ENV !== 'test', bodyLimit: 2 * 1024 * 1024, requestTimeout: 30000, trustProxy: process.env.TRUST_PROXY === 'true' });
@@ -28,7 +28,7 @@ const imageTypes = {
 };
 
 app.setErrorHandler((error, request, reply) => {
-  const status = error.statusCode || (error.code === '23503' ? 404 : error.code === '23505' ? 409 : 500);
+  const status = error.statusCode || (error.code === '23503' ? 404 : ['23505', '23514'].includes(error.code) ? 409 : 500);
   if (status >= 500) request.log.error(error);
   const uniqueMessage = error.constraint?.includes('slug') ? 'Sibling slug already exists' : error.constraint?.includes('order') ? 'Sibling order changed; reload and try again' : 'Page path already exists in this project';
   reply.code(status).send({ error: status >= 500 ? 'Internal server error' : error.code === '23505' ? uniqueMessage : error.message });
@@ -50,7 +50,7 @@ app.addHook('onRequest', async (request, reply) => {
   if (!user) return reply.code(401).send({ error: 'Sign in required' });
   request.user = user;
   const { projectId, pageId, assetId } = request.params || {};
-  if ((projectId && !await ownsProject(user.id, uuid(projectId))) || (pageId && !await ownsPage(user.id, uuid(pageId))) || (assetId && !await ownsAsset(user.id, uuid(assetId)))) return reply.code(404).send({ error: 'Resource not found' });
+  if ((projectId && !await canViewProject(user.id, uuid(projectId))) || (pageId && !await canViewPage(user.id, uuid(pageId))) || (assetId && !await canViewAsset(user.id, uuid(assetId)))) return reply.code(404).send({ error: 'Resource not found' });
 });
 app.addHook('onSend', async (request, reply, payload) => {
   reply.header('X-Content-Type-Options', 'nosniff');
@@ -83,7 +83,7 @@ app.post('/api/auth/logout', async (request, reply) => {
 app.get('/api/health/db', async () => ({ ok: await checkDatabase() }));
 app.get('/api/sample-page', async () => validDocument(samplePage));
 
-const withAccess = (project, request) => ({ ...project, access: request.user ? 'Owner' : 'Local access' });
+const withAccess = (project, request) => ({ ...project, access: project.systemKey ? 'System template' : request.user ? 'Owner' : 'Local access' });
 app.get('/api/projects', async request => ({ projects: (await listProjects(request.user?.id || null)).map(project => withAccess(project, request)) }));
 app.post('/api/projects', async (request, reply) => reply.code(201).send({ project: withAccess(await createProject(request.body?.name, request.user?.id || null), request) }));
 app.get('/api/projects/:projectId', async (request, reply) => {

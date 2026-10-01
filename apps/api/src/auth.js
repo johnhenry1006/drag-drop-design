@@ -50,9 +50,18 @@ export function sessionToken(request) { return /(?:^|;\s*)builder_session=([^;]+
 export async function ownsProject(userId, projectId) {
   return Boolean((await pool.query('SELECT 1 FROM projects WHERE id=$1 AND owner_id=$2', [projectId, userId])).rowCount);
 }
+export async function canViewProject(userId, projectId) {
+  return Boolean((await pool.query('SELECT 1 FROM projects WHERE id=$1 AND (owner_id=$2 OR system_key IS NOT NULL)', [projectId, userId])).rowCount);
+}
 export async function ownsPage(userId, pageId) {
   return Boolean((await pool.query('SELECT 1 FROM pages JOIN projects ON projects.id=pages.project_id WHERE pages.id=$1 AND projects.owner_id=$2', [pageId, userId])).rowCount);
 }
+export async function canViewPage(userId, pageId) {
+  return Boolean((await pool.query('SELECT 1 FROM pages JOIN projects ON projects.id=pages.project_id WHERE pages.id=$1 AND (projects.owner_id=$2 OR projects.system_key IS NOT NULL)', [pageId, userId])).rowCount);
+}
 export async function ownsAsset(userId, assetId) {
   return Boolean((await pool.query('SELECT 1 FROM assets JOIN projects ON projects.id=assets.project_id WHERE assets.id=$1 AND projects.owner_id=$2', [assetId, userId])).rowCount);
+}
+export async function canViewAsset(userId, assetId) {
+  return Boolean((await pool.query('SELECT 1 FROM assets JOIN projects ON projects.id=assets.project_id WHERE assets.id=$1 AND (projects.owner_id=$2 OR projects.system_key IS NOT NULL)', [assetId, userId])).rowCount);
 }

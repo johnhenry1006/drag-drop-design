@@ -6,7 +6,7 @@ process.env.PUBLIC_ORIGIN = 'http://localhost';
 const { app } = await import('../src/server.js');
 const { createUser } = await import('../src/auth.js');
 const { pool } = await import('../src/db.js');
-const { migrate } = await import('../src/store.js');
+const { migrate, samplePageId, sampleProjectId } = await import('../src/store.js');
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lqkAAAAASUVORK5CYII=', 'base64');
 const send = (method, url, payload, cookie) => app.inject({ method, url, payload, headers: { origin: 'http://localhost', ...(cookie ? { cookie } : {}), ...(Buffer.isBuffer(payload) ? { 'content-type': 'image/png', 'x-file-name': 'photo.png' } : { 'content-type': 'application/json' }) } });
 
@@ -26,6 +26,11 @@ test('sessions and project ownership cover pages, revisions, assets and exports'
     assert.match(login.headers['set-cookie'], /HttpOnly/);
     const one = login.headers['set-cookie'].split(';')[0];
     const two = (await send('POST', '/api/auth/login', { email: second.email, password: 'correct horse battery staple' })).headers['set-cookie'].split(';')[0];
+    assert.equal((await send('GET', '/api/projects', undefined, two)).json().projects.find(item => item.id === sampleProjectId)?.access, 'System template');
+    assert.equal((await send('GET', `/api/pages/${samplePageId}`, undefined, two)).statusCode, 200);
+    const protectedDelete = await send('DELETE', `/api/pages/${samplePageId}`, { expectedRevision: 1, mode: 'subtree', confirmedPageIds: [samplePageId] }, two);
+    assert.equal(protectedDelete.statusCode, 409);
+    assert.match(protectedDelete.json().error, /System sample pages cannot be deleted/);
     const project = (await send('POST', '/api/projects', { name: 'Private project' }, one)).json().project;
     const page = (await send('POST', `/api/projects/${project.id}/pages`, { name: 'Private page', document: samplePage }, one)).json().page;
     const badImage = Buffer.from(png); badImage.writeUInt32BE(8193, 16);

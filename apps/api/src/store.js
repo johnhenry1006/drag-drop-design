@@ -1,15 +1,60 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { linkNode, normalizePagePath, samplePage, validateDocument } from '@builder/document';
+import { linkNode, normalizePagePath, validateDocument } from '@builder/document';
 import { pool } from './db.js';
 import { assetBucket, assetStorageMode, deleteObject, getObject, putObject } from './object-store.js';
+import { northstarPageId, systemProject, systemSampleAssets, systemSamples } from './system-samples.js';
 
-const migrations = ['001_baseline', '002_accounts_storage', '003_asset_bucket', '004_project_management', '005_page_hierarchy', '006_sample_seed_state'].map((name, index) => ({ version: index + 1, path: fileURLToPath(new URL(`./migrations/${name}.sql`, import.meta.url)) }));
+const migrations = ['001_baseline', '002_accounts_storage', '003_asset_bucket', '004_project_management', '005_page_hierarchy', '006_sample_seed_state', '007_system_samples'].map((name, index) => ({ version: index + 1, path: fileURLToPath(new URL(`./migrations/${name}.sql`, import.meta.url)) }));
 export const assetUrl = id => `/api/assets/${id}/content`;
 
-export const sampleProjectId = '00000000-0000-4000-8000-000000000001';
-export const samplePageId = '00000000-0000-4000-8000-000000000002';
+export const sampleProjectId = systemProject.id;
+export const samplePageId = northstarPageId;
+
+async function seedSystemSamples(client, priorVersion) {
+  await client.query("SELECT set_config('builder.sample_maintenance','on',true)");
+  const state = (await client.query('SELECT status FROM sample_seed_state WHERE sample_page_id=$1', [northstarPageId])).rows[0];
+  let project = (await client.query('SELECT id,system_key FROM projects WHERE id=$1 FOR UPDATE', [systemProject.id])).rows[0];
+  let createdProject = false;
+  if (!project) {
+    if (state?.status === 'deleted' || state?.status === 'absent' || priorVersion !== null) {
+      if (!state) await client.query('INSERT INTO sample_seed_state(sample_page_id,status) VALUES($1,$2)', [northstarPageId, 'absent']);
+      return;
+    }
+    await client.query('INSERT INTO projects(id,name,system_key) VALUES($1,$2,$3)', [systemProject.id, systemProject.name, systemProject.key]);
+    project = { id: systemProject.id, system_key: systemProject.key };
+    createdProject = true;
+  }
+  if (project.system_key !== systemProject.key) {
+    const original = await client.query('SELECT 1 FROM pages WHERE id=$1 AND project_id=$2', [northstarPageId, systemProject.id]);
+    if (!original.rowCount) return;
+    throw new Error(`Fixture project ID ${systemProject.id} is occupied without system metadata`);
+  }
+  for (const asset of systemSampleAssets) {
+    const contents = await readFile(asset.file);
+    const sha256 = createHash('sha256').update(contents).digest('hex');
+    const existing = (await client.query('SELECT project_id,sha256,byte_length FROM assets WHERE id=$1', [asset.id])).rows[0];
+    if (existing) {
+      if (existing.project_id !== systemProject.id || existing.sha256 !== sha256 || existing.byte_length !== contents.length) throw new Error(`Fixture asset ID ${asset.id} conflicts with existing data`);
+    } else await client.query('INSERT INTO assets(id,project_id,filename,media_type,byte_length,sha256,contents) VALUES($1,$2,$3,$4,$5,$6,$7)', [asset.id, systemProject.id, asset.filename, asset.mediaType, contents.length, sha256, contents]);
+  }
+  let inserted = 0;
+  for (const fixture of systemSamples) {
+    const existing = (await client.query('SELECT project_id,sample_key,fixture_version FROM pages WHERE id=$1', [fixture.id])).rows[0];
+    if (existing) {
+      if (existing.project_id !== systemProject.id || existing.sample_key !== fixture.key) throw new Error(`Fixture page ID ${fixture.id} conflicts with existing data`);
+      continue;
+    }
+    if (fixture.id === northstarPageId && (!createdProject || state?.status === 'deleted' || state?.status === 'absent')) continue;
+    const order = (await client.query('SELECT COALESCE(MAX(sort_order)+1,0) AS value FROM pages WHERE project_id=$1 AND parent_page_id IS NULL', [systemProject.id])).rows[0].value;
+    await client.query('INSERT INTO pages(id,project_id,name,path,document,slug,sort_order,sample_key,fixture_version) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9)', [fixture.id, systemProject.id, fixture.name, fixture.path, JSON.stringify(validDocument(fixture.document)), fixture.slug, order, fixture.key, fixture.fixtureVersion]);
+    await client.query('INSERT INTO page_revisions(page_id,revision,document) VALUES($1,1,$2::jsonb)', [fixture.id, JSON.stringify(fixture.document)]);
+    inserted++;
+  }
+  if (inserted) await client.query('UPDATE projects SET version=version+1,updated_at=now() WHERE id=$1', [systemProject.id]);
+  await client.query('INSERT INTO sample_seed_state(sample_page_id,status) VALUES($1,$2) ON CONFLICT(sample_page_id) DO NOTHING', [northstarPageId, 'present']);
+}
 
 export async function migrate() {
   const client = await pool.connect();
@@ -29,18 +74,7 @@ export async function migrate() {
     }
     await client.query('BEGIN');
     try {
-      const recorded = await client.query('SELECT status FROM sample_seed_state WHERE sample_page_id=$1', [samplePageId]);
-      if (!recorded.rowCount) {
-        const existing = await client.query('SELECT 1 FROM pages WHERE id=$1 AND project_id=$2', [samplePageId, sampleProjectId]);
-        let status = existing.rowCount ? 'present' : 'absent';
-        if (!existing.rowCount && priorVersion === null && process.env.NODE_ENV !== 'production') {
-          await client.query('INSERT INTO projects(id,name) VALUES($1,$2)', [sampleProjectId, 'Sample project']);
-          await client.query('INSERT INTO pages(id,project_id,name,path,document,slug,sort_order) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7)', [samplePageId, sampleProjectId, 'Sample page', '/', JSON.stringify(samplePage), 'home', 0]);
-          await client.query('INSERT INTO page_revisions(page_id,revision,document) VALUES($1,1,$2::jsonb)', [samplePageId, JSON.stringify(samplePage)]);
-          status = 'present';
-        }
-        await client.query('INSERT INTO sample_seed_state(sample_page_id,status) VALUES($1,$2)', [samplePageId, status]);
-      }
+      await seedSystemSamples(client, priorVersion);
       await client.query('COMMIT');
     } catch (error) { await client.query('ROLLBACK'); throw error; }
   } finally {
@@ -63,12 +97,12 @@ function validPath(value) {
   catch (error) { throw Object.assign(error, { statusCode: 400 }); }
 }
 
-const projectColumns = 'p.id, p.name, p.version, p.created_at AS "createdAt", p.updated_at AS "updatedAt", GREATEST(p.updated_at, COALESCE(pg.last_updated, p.updated_at), COALESCE(a.last_updated, p.updated_at)) AS "lastUpdatedAt", COALESCE(pg.page_count, 0)::integer AS "pageCount", COALESCE(pg.revision_count, 0)::integer AS "revisionCount", COALESCE(a.asset_count, 0)::integer AS "assetCount"';
+const projectColumns = 'p.id, p.name, p.system_key AS "systemKey", p.version, p.created_at AS "createdAt", p.updated_at AS "updatedAt", GREATEST(p.updated_at, COALESCE(pg.last_updated, p.updated_at), COALESCE(a.last_updated, p.updated_at)) AS "lastUpdatedAt", COALESCE(pg.page_count, 0)::integer AS "pageCount", COALESCE(pg.revision_count, 0)::integer AS "revisionCount", COALESCE(a.asset_count, 0)::integer AS "assetCount"';
 const projectFrom = `FROM projects p LEFT JOIN LATERAL (SELECT COUNT(*) AS page_count, MAX(updated_at) AS last_updated, (SELECT COUNT(*) FROM page_revisions pr JOIN pages rp ON rp.id=pr.page_id WHERE rp.project_id=p.id) AS revision_count FROM pages WHERE project_id=p.id) pg ON true LEFT JOIN LATERAL (SELECT COUNT(*) AS asset_count, MAX(created_at) AS last_updated FROM assets WHERE project_id=p.id) a ON true`;
-const pageColumns = 'id, project_id AS "projectId", parent_page_id AS "parentPageId", slug, sort_order AS "sortOrder", name, path, document, revision, created_at AS "createdAt", updated_at AS "updatedAt"';
+const pageColumns = 'id, project_id AS "projectId", parent_page_id AS "parentPageId", slug, sort_order AS "sortOrder", sample_key AS "sampleKey", fixture_version AS "fixtureVersion", name, path, document, revision, created_at AS "createdAt", updated_at AS "updatedAt"';
 const assetColumns = 'id, project_id AS "projectId", filename, media_type AS "mediaType", byte_length AS "byteLength", sha256, created_at AS "createdAt"';
 
-export async function listProjects(ownerId = null) { return (await pool.query(`SELECT ${projectColumns} ${projectFrom} WHERE ($1::uuid IS NULL OR p.owner_id=$1) ORDER BY p.created_at, p.id`, [ownerId])).rows; }
+export async function listProjects(ownerId = null) { return (await pool.query(`SELECT ${projectColumns} ${projectFrom} WHERE ($1::uuid IS NULL OR p.owner_id=$1 OR p.system_key IS NOT NULL) ORDER BY p.created_at, p.id`, [ownerId])).rows; }
 export async function getProject(id) { return (await pool.query(`SELECT ${projectColumns} ${projectFrom} WHERE p.id=$1`, [id])).rows[0] || null; }
 export async function createProject(name, ownerId = null) {
   const id = randomUUID();
@@ -77,7 +111,8 @@ export async function createProject(name, ownerId = null) {
 }
 export async function updateProject(id, name, expectedVersion) {
   if (!Number.isInteger(expectedVersion) || expectedVersion < 1) throw Object.assign(new Error('expectedVersion must be a positive integer'), { statusCode: 400 });
-  const result = await pool.query('UPDATE projects SET name=$2, version=version+1, updated_at=now() WHERE id=$1 AND version=$3 RETURNING id', [id, validName(name, 'Project name'), expectedVersion]);
+  if ((await getProject(id))?.systemKey) throw Object.assign(new Error('System template project is read-only'), { statusCode: 409 });
+  const result = await pool.query('UPDATE projects SET name=$2, version=version+1, updated_at=now() WHERE id=$1 AND version=$3 AND system_key IS NULL RETURNING id', [id, validName(name, 'Project name'), expectedVersion]);
   return result.rowCount ? { project: await getProject(id) } : { project: null, current: await getProject(id) };
 }
 
@@ -88,8 +123,9 @@ export async function deleteProject(id, name, expectedVersion, expectedCounts) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const locked = (await client.query('SELECT id, name, version FROM projects WHERE id=$1 FOR UPDATE', [id])).rows[0];
+    const locked = (await client.query('SELECT id, name, version, system_key FROM projects WHERE id=$1 FOR UPDATE', [id])).rows[0];
     if (!locked) { await client.query('ROLLBACK'); return { missing: true }; }
+    if (locked.system_key) throw Object.assign(new Error('System template project cannot be deleted'), { statusCode: 409 });
     const counts = (await client.query(`SELECT (SELECT count(*) FROM pages WHERE project_id=$1)::integer AS "pageCount", (SELECT count(*) FROM page_revisions pr JOIN pages pg ON pg.id=pr.page_id WHERE pg.project_id=$1)::integer AS "revisionCount", (SELECT count(*) FROM assets WHERE project_id=$1)::integer AS "assetCount"`, [id])).rows[0];
     if (locked.name !== name || locked.version !== expectedVersion || Object.keys(counts).some(key => counts[key] !== expectedCounts[key])) { await client.query('ROLLBACK'); return { conflict: true }; }
     const objects = (await client.query('SELECT DISTINCT object_bucket AS bucket, object_key AS key FROM assets WHERE project_id=$1 AND object_key IS NOT NULL', [id])).rows;
@@ -98,7 +134,6 @@ export async function deleteProject(id, name, expectedVersion, expectedCounts) {
       const shared = await client.query('SELECT 1 FROM assets WHERE project_id<>$1 AND object_bucket=$2 AND object_key=$3 LIMIT 1', [id, object.bucket, object.key]);
       if (!shared.rowCount) await client.query('INSERT INTO asset_object_deletions(object_bucket,object_key) VALUES($1,$2) ON CONFLICT DO NOTHING', [object.bucket, object.key]);
     }
-    if (id === sampleProjectId) await client.query('UPDATE sample_seed_state SET status=$2,updated_at=now() WHERE sample_page_id=$1', [samplePageId, 'deleted']);
     await client.query('DELETE FROM projects WHERE id=$1', [id]);
     await client.query('COMMIT');
     return { deleted: true, counts };
@@ -127,7 +162,7 @@ function validSlug(value) {
   return value;
 }
 const slugFromPath = path => path === '/' ? 'home' : path.slice(path.lastIndexOf('/') + 1).replace(/-+/g, '-').replace(/^-|-$/g, '') || 'page';
-const pageMetadataColumns = 'id, project_id AS "projectId", parent_page_id AS "parentPageId", slug, sort_order AS "sortOrder", name, path, revision, created_at AS "createdAt", updated_at AS "updatedAt"';
+const pageMetadataColumns = 'id, project_id AS "projectId", parent_page_id AS "parentPageId", slug, sort_order AS "sortOrder", sample_key AS "sampleKey", fixture_version AS "fixtureVersion", name, path, revision, created_at AS "createdAt", updated_at AS "updatedAt"';
 export async function listPages(projectId) {
   const rows = (await pool.query(`SELECT ${pageMetadataColumns} FROM pages WHERE project_id=$1 ORDER BY sort_order,id`, [projectId])).rows;
   const children = new Map();
@@ -146,7 +181,9 @@ export async function createPage(projectId, name, document, path, parentPageId =
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    if (!(await client.query('SELECT id FROM projects WHERE id=$1 FOR UPDATE', [projectId])).rowCount) throw Object.assign(new Error('Project not found'), { statusCode: 404 });
+    const project = (await client.query('SELECT id,system_key FROM projects WHERE id=$1 FOR UPDATE', [projectId])).rows[0];
+    if (!project) throw Object.assign(new Error('Project not found'), { statusCode: 404 });
+    if (project.system_key) throw Object.assign(new Error('System template project is read-only'), { statusCode: 409 });
     const parent = parentPageId === null ? null : (await client.query('SELECT id,path FROM pages WHERE id=$1 AND project_id=$2', [parentPageId, projectId])).rows[0];
     if (parentPageId !== null && !parent) throw badRequest('Parent page must be in this project');
     await assertPageTargets(client, projectId, pageDocument);
@@ -214,7 +251,8 @@ export async function savePage(id, expectedRevision, document, name, path, slug,
     await client.query('BEGIN');
     const identity = (await client.query('SELECT project_id FROM pages WHERE id=$1', [id])).rows[0];
     if (!identity) { await client.query('ROLLBACK'); return { page: null, current: null }; }
-    await client.query('SELECT id FROM projects WHERE id=$1 FOR UPDATE', [identity.project_id]);
+    const project = (await client.query('SELECT system_key FROM projects WHERE id=$1 FOR UPDATE', [identity.project_id])).rows[0];
+    if (project?.system_key) throw Object.assign(new Error('System sample pages are read-only'), { statusCode: 409 });
     const current = (await client.query(`SELECT ${pageColumns} FROM pages WHERE id=$1 FOR UPDATE`, [id])).rows[0];
     if (!current || current.revision !== expectedRevision) { await client.query('ROLLBACK'); return { page: null, current }; }
     let pageDocument = validDocument(document === undefined ? current.document : document);
@@ -246,9 +284,9 @@ export async function savePage(id, expectedRevision, document, name, path, slug,
 async function lockedHierarchy(client, pageId) {
   const identity = (await client.query('SELECT project_id FROM pages WHERE id=$1', [pageId])).rows[0];
   if (!identity) return null;
-  await client.query('SELECT id FROM projects WHERE id=$1 FOR UPDATE', [identity.project_id]);
-  const rows = (await client.query('SELECT id,project_id AS "projectId",parent_page_id AS "parentPageId",slug,sort_order AS "sortOrder",revision,document,path FROM pages WHERE project_id=$1 ORDER BY id FOR UPDATE', [identity.project_id])).rows;
-  return { projectId: identity.project_id, rows, target: rows.find(row => row.id === pageId) };
+  const project = (await client.query('SELECT system_key FROM projects WHERE id=$1 FOR UPDATE', [identity.project_id])).rows[0];
+  const rows = (await client.query('SELECT id,project_id AS "projectId",parent_page_id AS "parentPageId",slug,sort_order AS "sortOrder",sample_key AS "sampleKey",revision,document,path FROM pages WHERE project_id=$1 ORDER BY id FOR UPDATE', [identity.project_id])).rows;
+  return { projectId: identity.project_id, systemKey: project?.system_key, rows, target: rows.find(row => row.id === pageId) };
 }
 const parentKey = id => id || '';
 function siblingGroups(rows) {
@@ -300,6 +338,7 @@ export async function movePage(id, expectedRevision, parentPageId, index) {
     const state = await lockedHierarchy(client, id);
     if (!state) { await client.query('ROLLBACK'); return { missing: true }; }
     const { rows, target, projectId } = state;
+    if (state.systemKey || target.sampleKey) throw Object.assign(new Error('System sample pages are read-only'), { statusCode: 409 });
     if (target.revision !== expectedRevision) { await client.query('ROLLBACK'); return { conflict: true }; }
     if (parentPageId !== null && !rows.some(row => row.id === parentPageId)) throw badRequest('Parent page must be in this project');
     if (descendantIds(rows, id).has(parentPageId)) throw badRequest('A page cannot move under itself or a descendant');
@@ -328,9 +367,11 @@ export async function deletePage(id, expectedRevision, mode, destinationParentPa
     const state = await lockedHierarchy(client, id);
     if (!state) { await client.query('ROLLBACK'); return { missing: true }; }
     const { rows, target, projectId } = state;
+    if (state.systemKey) throw Object.assign(new Error('System sample pages cannot be deleted'), { statusCode: 409 });
     if (target.revision !== expectedRevision) { await client.query('ROLLBACK'); return { conflict: true }; }
     const subtree = descendantIds(rows, id);
     const removed = mode === 'subtree' ? subtree : new Set([id]);
+    if (rows.some(row => removed.has(row.id) && row.sampleKey)) throw Object.assign(new Error('System sample pages cannot be deleted'), { statusCode: 409 });
     if (confirmedPageIds.length !== removed.size || new Set(confirmedPageIds).size !== removed.size || confirmedPageIds.some(value => !removed.has(value))) throw conflict('The pages affected by deletion changed; review them again');
     if (mode === 'reparent' && destinationParentPageId === undefined) throw badRequest('Select a destination parent, or null for root');
     if (mode === 'reparent' && destinationParentPageId !== null && !rows.some(row => row.id === destinationParentPageId)) throw badRequest('Destination parent must be in this project');
@@ -347,7 +388,6 @@ export async function deletePage(id, expectedRevision, mode, destinationParentPa
         parentChanges.set(child.id, destinationParentPageId);
       }
     }
-    if (removed.has(samplePageId)) await client.query('UPDATE sample_seed_state SET status=$2,updated_at=now() WHERE sample_page_id=$1', [samplePageId, 'deleted']);
     await client.query('DELETE FROM pages WHERE id=ANY($1::uuid[])', [[...removed]]);
     const survivors = rows.filter(row => !removed.has(row.id));
     const finalGroups = siblingGroups(survivors);
@@ -383,6 +423,7 @@ export async function listAssets(projectId) {
   return (await pool.query(`SELECT ${assetColumns} FROM assets WHERE project_id=$1 ORDER BY created_at DESC, id`, [projectId])).rows.map(asset => ({ ...asset, url: assetUrl(asset.id) }));
 }
 export async function createAsset(projectId, filename, mediaType, contents) {
+  if ((await getProject(projectId))?.systemKey) throw Object.assign(new Error('System template assets are read-only'), { statusCode: 409 });
   const id = randomUUID();
   const sha256 = createHash('sha256').update(contents).digest('hex');
   const objectBucket = assetStorageMode() === 's3' ? assetBucket() : null;

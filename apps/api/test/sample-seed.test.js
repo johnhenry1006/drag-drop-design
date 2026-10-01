@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { pool } from '../src/db.js';
 
-test('sample initialization is one-time and respects authorized deletion or a legacy absence', async () => {
+test('system samples initialize once, reject deletion, and preserve legacy absence', async () => {
   const run = async mode => {
     const schema = `sample_seed_test_${randomUUID().replaceAll('-', '')}`;
     await pool.query(`CREATE SCHEMA ${schema}`);
@@ -16,7 +16,7 @@ test('sample initialization is one-time and respects authorized deletion or a le
         env: { ...process.env, DATABASE_URL: url.toString(), NODE_ENV: 'test' },
         encoding: 'utf8'
       });
-      assert.match(output, mode === 'legacy-missing' ? /legacy missing sample was not invented or recreated/ : /isolated sample seed, saved edit, page deletion, and project deletion passed/);
+      assert.match(output, mode === 'legacy-missing' ? /legacy missing sample was not invented or recreated/ : /concurrent seed, maintenance preservation, protected deletion and ordinary CRUD passed/);
     } finally {
       await pool.query(`DROP SCHEMA ${schema} CASCADE`);
     }

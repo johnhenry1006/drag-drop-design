@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
+import { deleteEditableSample, openEditableSample } from './editable-sample.js';
 
-const editorUrl = process.env.EDITOR_URL || 'http://127.0.0.1:5173/';
 const browserPath = process.env.CHROME_PATH || '/usr/bin/google-chrome';
 
 async function pageJson(page) {
@@ -36,13 +36,13 @@ async function snapshot(page, ids) {
 
 test('Preview matches free composition and restructured suggestion at desktop and mobile widths', async () => {
   const browser = await chromium.launch({ executablePath: browserPath, headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+  let projectId;
   try {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, acceptDownloads: true });
     const page = await context.newPage();
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
-    await page.goto(editorUrl);
-    await page.getByRole('heading', { name: 'Make room for remarkable.' }).waitFor();
+    projectId = await openEditableSample(page);
 
     await selectRegion(page, 'header');
     await page.locator('[data-palette="Heading"]').click();
@@ -93,16 +93,16 @@ test('Preview matches free composition and restructured suggestion at desktop an
     assert.deepEqual(await snapshot(page, ids), mobilePreview);
     assert.deepEqual(await pageJson(page), before);
     assert.deepEqual(errors, []);
-  } finally { await browser.close(); }
+  } finally { await browser.close(); await deleteEditableSample(projectId); }
 });
 
 test('region suggestion shortcut inserts Gallery images that render from Page JSON in Preview', async () => {
   const browser = await chromium.launch({ executablePath: browserPath, headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+  let projectId;
   try {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, acceptDownloads: true });
     const page = await context.newPage();
-    await page.goto(editorUrl);
-    await page.getByRole('heading', { name: 'Make room for remarkable.' }).waitFor();
+    projectId = await openEditableSample(page);
     await page.getByRole('button', { name: 'Layers', exact: true }).click();
     await page.getByRole('button', { name: 'Suggest layout for main' }).click();
     assert.equal((await page.locator('.suggestion-regions button.active').innerText()).toLowerCase(), 'main');
@@ -121,5 +121,5 @@ test('region suggestion shortcut inserts Gallery images that render from Page JS
     await previewImage.evaluate(element => element.decode());
     assert.equal(await previewImage.getAttribute('src'), src);
     assert.ok(await previewImage.evaluate(element => element.naturalWidth > 0));
-  } finally { await browser.close(); }
+  } finally { await browser.close(); await deleteEditableSample(projectId); }
 });

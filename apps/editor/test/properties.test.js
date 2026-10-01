@@ -3,8 +3,8 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
 import { exportHtml, exportReact, exportVue } from '@builder/exporters';
+import { deleteEditableSample, openEditableSample } from './editable-sample.js';
 
-const editorUrl = process.env.EDITOR_URL || 'http://127.0.0.1:5173/';
 const browserPath = process.env.CHROME_PATH || '/usr/bin/google-chrome';
 
 async function pageJson(page) {
@@ -14,13 +14,13 @@ async function pageJson(page) {
 
 test('Properties tabs edit breakpoint styles, scoped CSS, and content without covering canvas', async () => {
   const browser = await chromium.launch({ executablePath: browserPath, headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+  let projectId;
   try {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, acceptDownloads: true });
     const page = await context.newPage();
     const pageErrors = [];
     page.on('pageerror', error => pageErrors.push(error.message));
-    await page.goto(editorUrl);
-    await page.getByRole('heading', { name: 'Make room for remarkable.' }).waitFor();
+    projectId = await openEditableSample(page);
     const canvasBox = await page.locator('.canvas-area').boundingBox();
     const propertiesBox = await page.locator('.properties').boundingBox();
     assert.ok(propertiesBox.x >= canvasBox.x + canvasBox.width - 1);
@@ -101,5 +101,5 @@ test('Properties tabs edit breakpoint styles, scoped CSS, and content without co
       assert.match(css, /\.n-hero_copy\{background-color:#ffeedd;letter-spacing:\.08em;border-radius:12px\}/);
     }
     assert.deepEqual(pageErrors, []);
-  } finally { await browser.close(); }
+  } finally { await browser.close(); await deleteEditableSample(projectId); }
 });
