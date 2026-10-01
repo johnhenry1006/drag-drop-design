@@ -10,7 +10,7 @@ export function pageTrail(page, pages) {
   return trail;
 }
 
-export function PageManager({ pages, currentPageId, dirty, busy, readOnly = false, error, onClose, onSelect, onCreate, onChange, onMove, onDelete, onInspectReferences }) {
+export function PageManager({ pages, currentPageId, dirty, busy, readOnly = false, error, onClose, onSelect, onUseTemplate, onCreate, onChange, onMove, onDelete, onInspectReferences }) {
   const [search, setSearch] = useState('');
   const [collapsed, setCollapsed] = useState(new Set());
   const [editing, setEditing] = useState(null);
@@ -81,8 +81,9 @@ export function PageManager({ pages, currentPageId, dirty, busy, readOnly = fals
           if (event.key === 'End') { event.preventDefault(); focusRow(event, pages.length); }
           if (event.key === 'ArrowLeft' && childCount && !collapsed.has(page.id)) { event.preventDefault(); toggle(page.id); }
           if (event.key === 'ArrowRight' && childCount && collapsed.has(page.id)) { event.preventDefault(); toggle(page.id); }
-        }}><strong>{page.name}</strong><small>{trail} · level {page.level} · {page.path}{page.id === currentPageId ? dirty ? ' · Draft' : ' · Saved' : ''}</small></button>
+        }}><strong>{page.name}</strong>{page.sampleKey && <span className="sample-badge">Sample · Read-only</span>}<small>{trail} · level {page.level} · {page.path}{page.id === currentPageId ? dirty ? ' · Draft' : ' · Saved' : ''}</small></button>
       </div>
+      {readOnly && page.sampleKey && <div className="page-tree-actions"><button disabled={busy} onClick={() => onSelect(page.id)}>Preview / View</button><button disabled={busy} onClick={() => onUseTemplate(page.id)}>Use this template</button></div>}
       {!readOnly && <div className="page-tree-actions"><button disabled={busy} onClick={() => onCreate(page.id)}>Create child</button><button disabled={busy} onClick={() => setEdit(page)}>Rename / path</button><button disabled={busy} onClick={() => setMove(page)}>Move / order</button><button disabled={busy} onClick={() => setDelete(page)}>Delete</button></div>}
       {editing === page.id && <form className="page-manager-form" onSubmit={async event => { event.preventDefault(); if (await onChange(page, { name, slug, path })) setEditing(null); }}><label>Name<input value={name} onChange={event => setName(event.target.value)} required maxLength={120} /></label><label>Sibling slug<input value={slug} onChange={event => setSlug(event.target.value)} required pattern="[a-z0-9]+(-[a-z0-9]+)*" /></label><label>URL path<input value={path} onChange={event => setPath(event.target.value)} required /></label>{path !== page.path && <p>Route change: {page.path} → {path}. Current internal links will be updated.</p>}<button disabled={busy}>Apply changes</button><button type="button" onClick={() => setEditing(null)}>Cancel</button></form>}
       {moving === page.id && <form className="page-manager-form" onSubmit={async event => { event.preventDefault(); if (await onMove(page, parentId || null, Number(event.currentTarget.elements.position.value))) setMoving(null); }}><label>Parent<select value={parentId} onChange={event => { setParentId(event.target.value); event.currentTarget.form.elements.position.value = '0'; }}><option value="">Root</option>{destinations.map(candidate => <option key={candidate.id} value={candidate.id}>{pageTrail(candidate, pages).map(item => item.name).join(' > ')}</option>)}</select></label><label>Position among siblings (0–{siblingCount})<input name="position" type="number" min="0" max={siblingCount} step="1" defaultValue={page.sortOrder} required /></label><p>Moving keeps this page and its descendants at their current URLs.</p><button disabled={busy}>Move page</button><button type="button" onClick={() => setMoving(null)}>Cancel</button></form>}

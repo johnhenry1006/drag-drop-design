@@ -32,6 +32,12 @@ test('sessions and project ownership cover pages, revisions, assets and exports'
     assert.equal(protectedDelete.statusCode, 409);
     assert.match(protectedDelete.json().error, /System sample pages cannot be deleted/);
     const project = (await send('POST', '/api/projects', { name: 'Private project' }, one)).json().project;
+    const copyRequest = { pages: [{ samplePageId: '00000000-0000-4000-8000-000000000003', name: 'Private template copy', path: '/template-copy' }] };
+    assert.equal((await send('POST', `/api/projects/${project.id}/templates/copy`, copyRequest, two)).statusCode, 404);
+    assert.equal((await send('POST', `/api/projects/${sampleProjectId}/templates/copy`, copyRequest, one)).statusCode, 404);
+    const copied = (await send('POST', `/api/projects/${project.id}/templates/copy`, copyRequest, one)).json().pages[0];
+    assert.equal(copied.sampleKey, null);
+    assert.equal((await send('GET', `/api/pages/${copied.id}`, undefined, two)).statusCode, 404);
     const page = (await send('POST', `/api/projects/${project.id}/pages`, { name: 'Private page', document: samplePage }, one)).json().page;
     const badImage = Buffer.from(png); badImage.writeUInt32BE(8193, 16);
     assert.equal((await send('POST', `/api/projects/${project.id}/assets`, badImage, one)).statusCode, 400);

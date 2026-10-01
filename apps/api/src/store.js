@@ -2,6 +2,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { linkNode, normalizePagePath, validateDocument } from '@builder/document';
+import { cloneTemplateDocument, nodeIdMap, referencedTemplateAssetIds, templateDependencies } from './template-copy.js';
 import { pool } from './db.js';
 import { assetBucket, assetStorageMode, deleteObject, getObject, putObject } from './object-store.js';
 import { northstarPageId, systemProject, systemSampleAssets, systemSamples } from './system-samples.js';
@@ -174,6 +175,68 @@ export async function listPages(projectId) {
   return result;
 }
 export async function getPage(id) { return (await pool.query(`SELECT ${pageColumns} FROM pages WHERE id=$1`, [id])).rows[0] || null; }
+
+export async function listSampleTemplates() {
+  const rows = (await pool.query(`SELECT ${pageColumns} FROM pages WHERE project_id=$1 AND sample_key IS NOT NULL ORDER BY sort_order,id`, [systemProject.id])).rows;
+  return rows.map(page => ({ id: page.id, sampleKey: page.sampleKey, fixtureVersion: page.fixtureVersion, name: page.name, path: page.path, requires: templateDependencies(page, rows) }));
+}
+
+export async function copySampleTemplates(projectId, requested) {
+  if (!Array.isArray(requested) || !requested.length || requested.length > 20 || requested.some(item => !item || typeof item.samplePageId !== 'string')) throw badRequest('Select 1–20 sample pages to copy');
+  if (new Set(requested.map(item => item.samplePageId)).size !== requested.length) throw badRequest('Each sample may be selected once');
+  const entries = requested.map(item => ({ id: item.samplePageId, name: validName(item.name, 'Page name'), path: validPath(item.path) }));
+  if (new Set(entries.map(item => item.path)).size !== entries.length) throw badRequest('Copied pages need distinct paths');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const sourceProject = (await client.query('SELECT id FROM projects WHERE id=$1 AND system_key=$2 FOR SHARE', [systemProject.id, systemProject.key])).rows[0];
+    if (!sourceProject) throw Object.assign(new Error('System templates are unavailable'), { statusCode: 404 });
+    const destination = (await client.query('SELECT id,system_key FROM projects WHERE id=$1 FOR UPDATE', [projectId])).rows[0];
+    if (!destination) throw Object.assign(new Error('Destination project not found'), { statusCode: 404 });
+    if (destination.system_key) throw conflict('Choose an editable destination project');
+    const samples = (await client.query(`SELECT ${pageColumns} FROM pages WHERE project_id=$1 AND sample_key IS NOT NULL ORDER BY sort_order,id FOR SHARE`, [systemProject.id])).rows;
+    const samplesById = new Map(samples.map(page => [page.id, page]));
+    const samplesByPath = new Map(samples.map(page => [page.path, page]));
+    const selected = entries.map(entry => samplesById.get(entry.id));
+    if (selected.some(page => !page)) throw badRequest('Only canonical sample pages can be copied');
+    const destinationPaths = new Set((await client.query('SELECT path FROM pages WHERE project_id=$1', [projectId])).rows.map(row => row.path));
+    for (const entry of entries) if (destinationPaths.has(entry.path)) throw conflict(`Page path ${entry.path} already exists in the destination project`);
+    const pageIds = new Map(entries.map(entry => [entry.id, randomUUID()]));
+    const paths = new Map(entries.map(entry => [entry.id, entry.path]));
+    const nodeIdsByPage = new Map(selected.map(page => [page.id, nodeIdMap(page.document)]));
+    const sourceAssetIds = referencedTemplateAssetIds(selected);
+    const assets = sourceAssetIds.length ? (await client.query('SELECT id,project_id,filename,media_type,byte_length,sha256,contents,object_key,object_bucket FROM assets WHERE id=ANY($1::uuid[]) FOR SHARE', [sourceAssetIds])).rows : [];
+    const byAssetId = new Map(assets.map(asset => [asset.id, asset]));
+    for (const id of sourceAssetIds) if (byAssetId.get(id)?.project_id !== systemProject.id) throw conflict(`Template asset ${id} is missing or not owned by the system project`);
+    const assetIds = new Map(sourceAssetIds.map(id => [id, randomUUID()]));
+    const context = { pageIds, paths, samplesById, samplesByPath, destinationPaths, assetIds, nodeIdsByPage };
+    const documents = new Map(selected.map(page => [page.id, cloneTemplateDocument(page, context)]));
+    for (const asset of assets) {
+      const bytes = await assetContents({ contents: asset.contents, objectKey: asset.object_key, objectBucket: asset.object_bucket });
+      if (!bytes || bytes.length !== asset.byte_length || createHash('sha256').update(bytes).digest('hex') !== asset.sha256) throw conflict(`Template asset ${asset.id} failed integrity verification`);
+      await client.query('INSERT INTO assets(id,project_id,filename,media_type,byte_length,sha256,contents,object_key,object_bucket) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)', [assetIds.get(asset.id), projectId, asset.filename, asset.media_type, asset.byte_length, asset.sha256, asset.contents, asset.object_key, asset.object_bucket]);
+    }
+    const pending = [...entries];
+    const created = [];
+    while (pending.length) {
+      const index = pending.findIndex(entry => !samplesById.get(entry.id).parentPageId || !pageIds.has(samplesById.get(entry.id).parentPageId) || created.some(page => page.sourceId === samplesById.get(entry.id).parentPageId));
+      if (index < 0) throw conflict('Sample hierarchy contains a cycle');
+      const [entry] = pending.splice(index, 1);
+      const source = samplesById.get(entry.id);
+      const parentPageId = pageIds.get(source.parentPageId) || null;
+      const slug = validSlug(slugFromPath(entry.path));
+      const order = (await client.query('SELECT COALESCE(MAX(sort_order)+1,0) AS value FROM pages WHERE project_id=$1 AND parent_page_id IS NOT DISTINCT FROM $2::uuid', [projectId, parentPageId])).rows[0].value;
+      const document = documents.get(entry.id);
+      const page = (await client.query(`INSERT INTO pages(id,project_id,parent_page_id,slug,sort_order,name,path,document) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb) RETURNING ${pageColumns}`, [pageIds.get(entry.id), projectId, parentPageId, slug, order, entry.name, entry.path, JSON.stringify(document)])).rows[0];
+      await client.query('INSERT INTO page_revisions(page_id,revision,document) VALUES($1,1,$2::jsonb)', [page.id, JSON.stringify(document)]);
+      created.push({ ...page, sourceId: entry.id });
+    }
+    await client.query('UPDATE projects SET version=version+1,updated_at=now() WHERE id=$1', [projectId]);
+    await client.query('COMMIT');
+    return created;
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
+}
 
 export async function createPage(projectId, name, document, path, parentPageId = null, slug) {
   const pageName = validName(name, 'Page name');

@@ -11,6 +11,7 @@ import { PageView } from './render.jsx';
 import { PropertiesPanel } from './properties.jsx';
 import { ProjectManager } from './project-manager.jsx';
 import { PageManager, pageTrail } from './page-manager.jsx';
+import { TemplateCopyDialog } from './sample-templates.jsx';
 import { insertSuggestion, layoutSuggestions } from './suggestions.js';
 import { api, jsonOptions, uploadImage } from './api.js';
 import './style.css';
@@ -224,6 +225,10 @@ function App() {
   };
   const [savedDocument, setSavedDocument] = useState(null);
   const [projects, setProjects] = useState([]);
+  const [templates, setTemplates] = useState([]);
+  const [copyTemplateId, setCopyTemplateId] = useState(null);
+  const [copyBusy, setCopyBusy] = useState(false);
+  const [copyError, setCopyError] = useState('');
   const [showProjectManager, setShowProjectManager] = useState(false);
   const [projectManagerBusy, setProjectManagerBusy] = useState(false);
   const [projectManagerError, setProjectManagerError] = useState('');
@@ -312,8 +317,9 @@ function App() {
     if (!auth || (auth.enabled && !auth.user)) return;
     (async () => {
       try {
-        const { projects: available } = await api('/projects');
+        const [{ projects: available }, { templates: samples }] = await Promise.all([api('/projects'), api('/templates')]);
         setProjects(available);
+        setTemplates(samples);
         if (available.length) await openProject(available.find(project => project.id === window.localStorage.getItem('builder:lastProjectId')) || available.find(project => project.id === '00000000-0000-4000-8000-000000000001') || available[0]);
       } catch (cause) { setError(cause.message); }
     })();
@@ -327,7 +333,7 @@ function App() {
 
   useEffect(() => {
     const keydown = event => {
-      if (preview || !documentRef.current) return;
+      if (preview || currentProject?.systemKey || !documentRef.current) return;
       const target = event.target;
       const editing = target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
       if (editing) return;
@@ -337,7 +343,7 @@ function App() {
     };
     window.addEventListener('keydown', keydown);
     return () => window.removeEventListener('keydown', keydown);
-  }, [preview]);
+  }, [preview, currentProject?.systemKey]);
 
   const login = async event => {
     event.preventDefault(); setLoginError('');
@@ -350,7 +356,7 @@ function App() {
     setAuth({ enabled: true, user: null });
   };
   const save = async () => {
-    if (!document || !currentPage || saving || uploadingRef.current) return false;
+    if (!document || !currentPage || currentProject?.systemKey || saving || uploadingRef.current) return false;
     const snapshot = document;
     setSaving(true);
     try {
@@ -382,8 +388,33 @@ function App() {
   const refreshProjects = async () => { const available = (await api('/projects')).projects; setProjects(available); return available; };
   const openProjectManager = async () => {
     setProjectManagerError(''); setShowProjectManager(true);
-    try { await refreshProjects(); }
+    try { await Promise.all([refreshProjects(), api('/templates').then(result => setTemplates(result.templates))]); }
     catch (cause) { setProjectManagerError(`Could not load projects: ${cause.message}`); }
+  };
+  const viewTemplate = async id => {
+    if (!await confirmNavigation()) return;
+    try {
+      const project = projects.find(item => item.systemKey);
+      if (!project) throw new Error('System template project is unavailable');
+      if (currentProject?.id !== project.id) await openProject(project);
+      activatePage((await api(`/pages/${id}`)).page);
+      setShowProjectManager(false); setShowPageManager(false); setCopyTemplateId(null);
+    } catch (cause) { setProjectManagerError(cause.message); setPageManagerError(cause.message); }
+  };
+  const useTemplate = id => { setShowProjectManager(false); setShowPageManager(false); setCopyError(''); setCopyTemplateId(id); };
+  const copyTemplates = async (projectId, selectedPages, initialId) => {
+    if (!await confirmNavigation()) return;
+    setCopyBusy(true); setCopyError('');
+    try {
+      const { pages: copied } = await api(`/projects/${projectId}/templates/copy`, jsonOptions('POST', { pages: selectedPages }));
+      const available = await refreshProjects();
+      await openProject(available.find(project => project.id === projectId));
+      activatePage(copied.find(page => page.sourceId === initialId) || copied[0]);
+      setCopyTemplateId(null);
+      setPreview(false);
+      setStatus({ message: `Created ${copied.length} editable ${copied.length === 1 ? 'page' : 'pages'} from sample templates`, tone: 'success' });
+    } catch (cause) { setCopyError(cause.message); }
+    finally { setCopyBusy(false); }
   };
   const choosePage = async id => {
     if (id === currentPage?.id) return true;
@@ -539,6 +570,7 @@ function App() {
     } catch (cause) { setStatus({ message: cause.status === 409 ? `Restore conflict: server is at revision ${cause.currentRevision}. Reload before restoring.` : `Restore failed: ${cause.message}`, tone: 'error' }); }
   };
   const uploadAsset = async (nodeId, file) => {
+    if (currentProject?.systemKey) return;
     uploadingRef.current++; setUploading(true);
     try {
       const asset = await uploadImage(currentProject.id, file);
@@ -593,8 +625,9 @@ function App() {
   return <div className="app-shell">
     <header className="app-header"><div className="app-brand"><span className="brand-mark">✦</span><strong>Northstar Builder</strong>{auth?.user && <button className="toolbar-button" onClick={logout}>Sign out</button>}</div>
       <div className="header-actions"><select aria-label="Project" value={currentProject?.id || ''} onChange={event => chooseProject(event.target.value)} disabled={!projects.length}>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select><button className="toolbar-button" onClick={openProjectManager}>Projects</button><button className="toolbar-button" onClick={() => createNewProject()}>New project</button><select aria-label="Page" value={currentPage?.id || ''} onChange={event => choosePage(event.target.value)} disabled={!pages.length}>{pages.map(page => <option key={page.id} value={page.id}>{pageTrail(page, pages).map(item => item.name).join(' > ')} · {page.path}</option>)}</select><button className="toolbar-button" disabled={!currentProject} onClick={() => { setPageManagerError(''); setShowPageManager(true); }}>Pages</button><button className="toolbar-button" disabled={!currentProject || systemReadOnly} onClick={() => createNewPage(currentProject)}>New page</button><button className="toolbar-button" disabled={!currentPage || systemReadOnly} onClick={() => createNewPage(currentProject, false, currentPage.id)}>New child</button><button className="toolbar-button" disabled={!currentPage || systemReadOnly} onClick={changePagePath}>Path</button><span className={`save-indicator ${dirty ? 'dirty' : ''}`} data-save-state={dirty ? 'unsaved' : 'saved'}>{systemReadOnly ? 'System template · view only' : dirty ? 'Unsaved changes' : currentPage ? `Saved · v${currentPage.revision}` : 'No page'}</span><button className="toolbar-button" disabled={systemReadOnly || !history.past.length || preview} onClick={() => navigateHistory('undo')} title="Undo (Ctrl/⌘+Z)">Undo</button><button className="toolbar-button" disabled={systemReadOnly || !history.future.length || preview} onClick={() => navigateHistory('redo')} title="Redo (Ctrl/⌘+Shift+Z)">Redo</button><button className="toolbar-button" disabled={systemReadOnly || !selectedId && !selectedRegion || preview} onClick={() => { setSelectedId(null); setSelectedRegion(null); }} title="Clear selection (Escape)">Clear selection</button><button className="toolbar-button" disabled={systemReadOnly || !dirty || saving || uploading || !currentPage} onClick={save}>{uploading ? 'Uploading…' : saving ? 'Saving…' : 'Save'}</button>{conflict && !systemReadOnly && <button className="toolbar-button" onClick={saveAsCopy}>Save as copy</button>}<button className="toolbar-button" disabled={!currentPage} onClick={reloadPage}>Reload</button><button className="toolbar-button" disabled={!currentPage || preview || systemReadOnly} onClick={showHistory}>Revisions</button><button className="toolbar-button" disabled={!currentProject || preview || uploading} onClick={() => setShowExport(true)}>Export</button><button className="toolbar-button" disabled={!document} onClick={download}>Download JSON</button><button className="view-button" disabled={!document} onClick={togglePreview}>{preview ? 'Back to editor' : 'Preview page'}</button></div></header>
-    {showProjectManager && <ProjectManager projects={projects} currentProjectId={currentProject?.id} onClose={() => setShowProjectManager(false)} onCreate={createNewProject} onOpen={async id => { if (await chooseProject(id)) setShowProjectManager(false); }} onRename={renameProject} onDelete={removeProject} busy={projectManagerBusy} error={projectManagerError} />}
-    {showPageManager && currentProject && <PageManager pages={pages} currentPageId={currentPage?.id} dirty={dirty} busy={pageManagerBusy || navigationBusy} readOnly={systemReadOnly} error={pageManagerError} onClose={() => setShowPageManager(false)} onSelect={choosePage} onCreate={parentId => createNewPage(currentProject, false, parentId)} onChange={changeManagedPage} onMove={moveManagedPage} onDelete={deleteManagedPage} onInspectReferences={async (page, mode) => api(`/pages/${page.id}/references?mode=${mode}`)} />}
+    {showProjectManager && <ProjectManager projects={projects} currentProjectId={currentProject?.id} templates={templates} onViewTemplate={viewTemplate} onUseTemplate={useTemplate} onClose={() => setShowProjectManager(false)} onCreate={createNewProject} onOpen={async id => { if (await chooseProject(id)) setShowProjectManager(false); }} onRename={renameProject} onDelete={removeProject} busy={projectManagerBusy} error={projectManagerError} />}
+    {showPageManager && currentProject && <PageManager pages={pages} currentPageId={currentPage?.id} dirty={dirty} busy={pageManagerBusy || navigationBusy} readOnly={systemReadOnly} error={pageManagerError} onClose={() => setShowPageManager(false)} onSelect={choosePage} onUseTemplate={useTemplate} onCreate={parentId => createNewPage(currentProject, false, parentId)} onChange={changeManagedPage} onMove={moveManagedPage} onDelete={deleteManagedPage} onInspectReferences={async (page, mode) => api(`/pages/${page.id}/references?mode=${mode}`)} />}
+    {copyTemplateId && <TemplateCopyDialog templates={templates} projects={projects} initialId={copyTemplateId} busy={copyBusy} error={copyError} onClose={() => setCopyTemplateId(null)} onCopy={copyTemplates} />}
     {pendingNavigation && <div className="project-manager-backdrop"><section className="navigation-dialog" role="dialog" aria-modal="true" aria-label="Unsaved changes" onKeyDown={event => { if (event.key === 'Escape') settleNavigation('cancel'); }}><h2>Unsaved changes</h2><p>Save your page before continuing, discard its edits, or stay here.</p><div><button autoFocus disabled={saving || uploading} onClick={() => settleNavigation('save')}>Save and continue</button><button disabled={saving} onClick={() => settleNavigation('discard')}>Discard changes</button><button onClick={() => settleNavigation('cancel')}>Cancel</button></div></section></div>}
     {showRevisions && !preview && <div className="revision-popover"><strong>Page revisions</strong><p>Restoring creates a new revision.</p><label>Restore from<select aria-label="Revision to restore" value={chosenRevision} onChange={event => setChosenRevision(event.target.value)}>{revisions.map(item => <option key={item.revision} value={item.revision}>Revision {item.revision}</option>)}</select></label><button onClick={restore} disabled={!chosenRevision}>Restore revision</button></div>}
     {showExport && !preview && <div className="export-backdrop" role="presentation"><section className="export-dialog" role="dialog" aria-label="Export project"><div className="export-heading"><h2>Export project</h2><button aria-label="Close export" onClick={() => setShowExport(false)}>×</button></div><p>Download all saved pages and referenced assets as a source project.</p><label>Target<select aria-label="Export target" value={exportTarget} onChange={event => setExportTarget(event.target.value)}><option value="html">HTML5</option><option value="react">React JavaScript/JSX</option><option value="vue">Vue JavaScript</option></select></label>{dirty ? <p className="export-warning">Save the current page before exporting. Unsaved edits are not included.</p> : !exportReport && !exportError ? <p>Checking saved pages…</p> : exportReport && <><h3>Pages</h3><ul>{exportReport.pages.map(page => <li key={page.id}>{page.path} — {page.name}</li>)}</ul>{exportReport.issues.length ? <><h3>Resolve before download</h3><ul className="export-issues">{exportReport.issues.map((item, index) => <li key={index}>{item.pagePath || 'Project'}{item.nodeId ? ` · ${item.nodeId}` : ''} · {item.property}: {item.message}</li>)}</ul></> : <p className="export-ready">Ready to export {exportReport.pages.length} page(s).</p>}</>}{exportError && <p className="field-error" role="alert">{exportError}</p>}<button className="view-button" disabled={dirty || !exportReport || exportReport.issues.length > 0 || exportBusy} onClick={downloadExport}>{exportBusy ? 'Generating…' : 'Download ZIP'}</button></section></div>}

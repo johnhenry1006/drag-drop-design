@@ -6,8 +6,8 @@ import { analyzeProjectExport, buildProjectFiles, referencedAssetIds } from '@bu
 import { checkDatabase, pool } from './db.js';
 import { assetContents } from './store.js';
 import { checkObjectStore } from './object-store.js';
-import { authMode, canViewAsset, canViewPage, canViewProject, clearCookie, cookie, currentUser, sessionToken, signIn, signOut } from './auth.js';
-import { createAsset, createPage, createProject, deletePage, deleteProject, drainAssetObjectDeletions, getAsset, getPage, getProject, getRevision, listAssets, listPages, listProjects, listRevisions, migrate, movePage, pageInboundReferences, projectExportAssets, projectExportData, restorePage, savePage, updateProject, validDocument } from './store.js';
+import { authMode, canViewAsset, canViewPage, canViewProject, clearCookie, cookie, currentUser, ownsProject, sessionToken, signIn, signOut } from './auth.js';
+import { copySampleTemplates, createAsset, createPage, createProject, deletePage, deleteProject, drainAssetObjectDeletions, getAsset, getPage, getProject, getRevision, listAssets, listPages, listProjects, listRevisions, listSampleTemplates, migrate, movePage, pageInboundReferences, projectExportAssets, projectExportData, restorePage, savePage, updateProject, validDocument } from './store.js';
 
 export const app = Fastify({ logger: process.env.NODE_ENV !== 'test', bodyLimit: 2 * 1024 * 1024, requestTimeout: 30000, trustProxy: process.env.TRUST_PROXY === 'true' });
 const missing = (reply, kind) => reply.code(404).send({ error: `${kind} not found` });
@@ -82,6 +82,7 @@ app.post('/api/auth/logout', async (request, reply) => {
 });
 app.get('/api/health/db', async () => ({ ok: await checkDatabase() }));
 app.get('/api/sample-page', async () => validDocument(samplePage));
+app.get('/api/templates', async () => ({ templates: await listSampleTemplates() }));
 
 const withAccess = (project, request) => ({ ...project, access: project.systemKey ? 'System template' : request.user ? 'Owner' : 'Local access' });
 app.get('/api/projects', async request => ({ projects: (await listProjects(request.user?.id || null)).map(project => withAccess(project, request)) }));
@@ -113,6 +114,12 @@ app.post('/api/projects/:projectId/pages', async (request, reply) => {
   if (!await getProject(id)) return missing(reply, 'Project');
   const parentPageId = request.body?.parentPageId === undefined ? null : request.body.parentPageId === null ? null : uuid(request.body.parentPageId);
   return reply.code(201).send({ page: await createPage(id, request.body?.name, request.body?.document, request.body?.path, parentPageId, request.body?.slug) });
+});
+app.post('/api/projects/:projectId/templates/copy', async (request, reply) => {
+  const projectId = uuid(request.params.projectId);
+  if (authMode === 'local' && !await ownsProject(request.user.id, projectId)) return missing(reply, 'Project');
+  const pages = await copySampleTemplates(projectId, request.body?.pages);
+  return reply.code(201).send({ pages });
 });
 app.get('/api/pages/:pageId', async (request, reply) => {
   const page = await getPage(uuid(request.params.pageId));
